@@ -81,8 +81,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const data = localStorage.getItem('extension_login_data');
       if (data) {
         const parsed = JSON.parse(data);
-        // Check if data is less than 24 hours old
-        if (Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000) {
+        if (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) {
           return parsed.users;
         } else {
           // Clear old data
