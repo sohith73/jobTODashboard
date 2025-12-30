@@ -672,90 +672,130 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 
-  // Extract button - grab page HTML and send to backend with selected users
+  async function extractJobDataWithOpenAI(textContent, websiteUrl) {
+    try {
+      const response = await fetch(API_URLS.EXTRACT_JOB_DATA, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          content: textContent,
+          websiteUrl: websiteUrl
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Backend API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.success || !data.data) {
+        throw new Error(data.message || 'Failed to extract job data');
+      }
+
+      return {
+        company: data.data.company || 'Unknown',
+        position: data.data.position || 'Unknown',
+        description: data.data.description || ''
+      };
+    } catch (error) {
+      console.error('Job extraction error:', error);
+      throw error;
+    }
+  }
+
   extractBtn.addEventListener('click', async function () {
     try {
-      // Check if users are selected
-      if (selectedUsers.length === 0) {
+      if (selectedUsers.length === 0 && !loggedInEmail) {
         alert('Please select at least one user before extracting.');
         return;
       }
 
-      // Get selected user emails
-      const selectedEmails = selectedUsers.map(id => {
-        const user = allUsers.find(u => u._id === id);
-        return user ? user.email : null;
-      }).filter(email => email !== null);
+      const selectedEmails = selectedUsers.length > 0 
+        ? selectedUsers.map(id => {
+            const user = allUsers.find(u => u._id === id);
+            return user ? user.email : null;
+          }).filter(email => email !== null)
+        : loggedInEmail ? [loggedInEmail] : [];
+
+      if (selectedEmails.length === 0) {
+        alert('Please select at least one user before extracting.');
+        return;
+      }
+
+      extractBtn.disabled = true;
+      extractBtn.textContent = 'Extracting...';
 
       if (chrome && chrome.tabs && chrome.tabs.query) {
-        chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        chrome.tabs.query({ active: true, currentWindow: true }, async function (tabs) {
           const tabId = tabs && tabs[0] ? tabs[0].id : undefined;
           if (!tabId) {
-            console.log('No active tab found for extraction');
             alert('No active tab found for extraction');
+            extractBtn.disabled = false;
+            extractBtn.textContent = 'Extract';
             return;
           }
 
-          // Try to inject content script first if not available
           function tryExtraction() {
             chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
               if (chrome.runtime.lastError) {
-                console.log('Content script not available, trying to inject...');
-                // Try to inject the content script using activeTab permission
                 chrome.scripting.executeScript({
                   target: { tabId: tabId },
                   files: ['content.js']
                 }).then(() => {
-                  console.log('Content script injected successfully');
-                  // Wait a bit for script to load, then try again
                   setTimeout(tryExtraction, 1000);
                 }).catch((error) => {
-                  console.log('Failed to inject content script:', error);
-                  alert('Failed to inject content script. Please click the extension icon first, then try again.');
+                  alert('Failed to inject content script. Please refresh the page and try again.');
+                  extractBtn.disabled = false;
+                  extractBtn.textContent = 'Extract';
                 });
                 return;
               }
 
               if (response && response.ok) {
-                const { content, source, websiteUrl } = response.payload;
+                const { content, websiteUrl } = response.payload;
 
-                // Prepare data to send to backend
-                const dataToSend = {
-                  content: content, // Send text content instead of HTML
-                  websiteUrl: websiteUrl,
-                  selectedUsers: selectedEmails,
-                  extractedAt: new Date().toISOString()
-                };
-
-                console.log('Data to send to backend:', dataToSend);
-
-                // Send to backend
                 try {
-                  const backendResponse = await fetch(API_URLS.SEND_DATA, {
+                  const extractedData = await extractJobDataWithOpenAI(content, websiteUrl);
+                  
+                  const jobData = {
+                    company: extractedData.company,
+                    position: extractedData.position,
+                    description: extractedData.description,
+                    url: websiteUrl,
+                    selectedEmails: selectedEmails
+                  };
+
+                  const backendResponse = await fetch(API_URLS.SAVE_TO_DASHBOARD, {
                     method: 'POST',
                     headers: {
                       'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(dataToSend)
+                    body: JSON.stringify(jobData)
                   });
 
                   const backendData = await backendResponse.json();
 
                   if (backendResponse.ok) {
-                    console.log('Data sent to backend successfully:', backendData);
-                    alert('Data extracted and sent to backend successfully!');
+                    alert(`Job extracted and saved successfully! Saved for ${backendData.summary?.saved || 0} user(s).`);
                   } else {
-                    console.error('Backend error:', backendData);
-                    alert('Failed to send data to backend: ' + (backendData.message || 'Unknown error'));
+                    alert('Failed to save job: ' + (backendData.message || 'Unknown error'));
                   }
-                } catch (backendError) {
-                  console.error('Backend request failed:', backendError);
-                  alert('Failed to send data to backend: ' + backendError.message);
+                } catch (extractionError) {
+                  console.error('Extraction error:', extractionError);
+                  alert('Failed to extract job data: ' + extractionError.message);
+                } finally {
+                  extractBtn.disabled = false;
+                  extractBtn.textContent = 'Extract';
                 }
               } else {
                 const errorMsg = response && response.error ? response.error : 'Unknown error';
-                console.log('Extraction failed:', errorMsg);
-                alert('Extraction failed: ' + errorMsg);
+                alert('Failed to extract page content: ' + errorMsg);
+                extractBtn.disabled = false;
+                extractBtn.textContent = 'Extract';
               }
             });
           }
@@ -763,12 +803,15 @@ document.addEventListener('DOMContentLoaded', function () {
           tryExtraction();
         });
       } else {
-        console.log('Chrome tabs API not available');
         alert('Chrome tabs API not available');
+        extractBtn.disabled = false;
+        extractBtn.textContent = 'Extract';
       }
     } catch (err) {
-      console.log('Extraction error:', err);
+      console.error('Extraction error:', err);
       alert('Extraction error: ' + err.message);
+      extractBtn.disabled = false;
+      extractBtn.textContent = 'Extract';
     }
   });
 
