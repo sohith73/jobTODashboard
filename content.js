@@ -124,37 +124,153 @@
       // Helpers to query with resilient selectors
       const q = (sel) => document.querySelector(sel);
       const qa = (sel) => Array.from(document.querySelectorAll(sel));
+      
+      // Focus on the main job details panel, not sidebar job lists
+      // The main job details are typically in .jobs-details__main-content or similar
+      const mainJobContainer = q('.jobs-details__main-content') || 
+                               q('.job-details-jobs-unified-top-card__container') ||
+                               q('main') ||
+                               document.body;
+      
+      // Create a scoped query function that searches within main container
+      const qScoped = (sel) => {
+        try {
+          return mainJobContainer.querySelector(sel);
+        } catch (e) {
+          return q(sel);
+        }
+      };
 
-      // Extract company name from job details - using actual selectors from the HTML
+      // Helper function to extract text content robustly
+      const extractText = (element) => {
+        if (!element) return '';
+        // Try textContent first (includes hidden text)
+        let text = element.textContent || element.innerText || '';
+        // If empty, try getting direct child text nodes
+        if (!text.trim() && element.childNodes) {
+          text = Array.from(element.childNodes)
+            .filter(node => node.nodeType === Node.TEXT_NODE)
+            .map(node => node.textContent)
+            .join(' ')
+            .trim();
+        }
+        // If still empty, try getting from all descendants
+        if (!text.trim()) {
+          text = element.innerText || element.textContent || '';
+        }
+        return text.trim();
+      };
+
+      // Extract company name from job details - using scoped selectors to avoid sidebar jobs
       let companyName = 'Unknown Company';
-      const companyElement = q('.job-details-jobs-unified-top-card__company-name a') ||
-        q('.jobs-unified-top-card__company-name a') ||
-        q('a[href*="/company/"]') ||
-        q('.artdeco-entity-lockup__title a');
-      if (companyElement) {
-        companyName = companyElement.textContent.trim();
+      
+      // Try multiple selectors in order of specificity, scoped to main container
+      const companySelectors = [
+        '.job-details-jobs-unified-top-card__company-name a',
+        '.job-details-jobs-unified-top-card__company-name',
+        '.jobs-unified-top-card__company-name a',
+        '.jobs-unified-top-card__company-name',
+        'a[href*="/company/"][href*="/life"]',
+        'a[href*="/company/"]',
+        '.artdeco-entity-lockup__title a',
+        '.artdeco-entity-lockup__title'
+      ];
+      
+      let companyElement = null;
+      for (const selector of companySelectors) {
+        companyElement = qScoped(selector);
+        // If not found in scoped, try global as fallback
+        if (!companyElement) {
+          companyElement = q(selector);
+        }
+        if (companyElement) {
+          // Verify it's in the main container, not sidebar
+          const isInMainContainer = mainJobContainer.contains(companyElement);
+          if (isInMainContainer) {
+            const text = extractText(companyElement);
+            if (text && text !== 'Unknown Company') {
+              companyName = text;
+              break;
+            }
+          }
+        }
+      }
+      
+      // If still not found, try finding by text pattern near company-related elements
+      if (companyName === 'Unknown Company') {
+        const companyDiv = qScoped('.job-details-jobs-unified-top-card__company-name') || 
+                          q('.job-details-jobs-unified-top-card__company-name');
+        if (companyDiv && mainJobContainer.contains(companyDiv)) {
+          const text = extractText(companyDiv);
+          if (text) {
+            companyName = text;
+          }
+        }
       }
 
-      // Extract job title - using actual selectors from the HTML
+      // Extract job title - using scoped selectors to avoid sidebar jobs
       let jobTitle = 'Unknown Position';
-      const titleElement = q('.job-details-jobs-unified-top-card__job-title h1 a') ||
-        q('.job-details-jobs-unified-top-card__job-title h1') ||
-        q('.jobs-unified-top-card__job-title h1') ||
-        q('h1 a[href*="/jobs/view/"]') ||
-        q('h1');
-      if (titleElement) {
-        jobTitle = titleElement.textContent.trim();
+      
+      // Try multiple selectors in order of specificity, scoped to main container
+      const titleSelectors = [
+        '.job-details-jobs-unified-top-card__job-title h1 a',
+        '.job-details-jobs-unified-top-card__job-title h1',
+        '.job-details-jobs-unified-top-card__sticky-header h2',
+        '.jobs-unified-top-card__job-title h1 a',
+        '.jobs-unified-top-card__job-title h1',
+        'h1 a[href*="/jobs/view/"]',
+        'h1.t-24.t-bold',
+        'h1.t-24',
+        'h1'
+      ];
+      
+      let titleElement = null;
+      for (const selector of titleSelectors) {
+        titleElement = qScoped(selector);
+        // If not found in scoped, try global as fallback
+        if (!titleElement) {
+          titleElement = q(selector);
+        }
+        if (titleElement) {
+          // Verify it's in the main container, not sidebar
+          const isInMainContainer = mainJobContainer.contains(titleElement);
+          if (isInMainContainer) {
+            const text = extractText(titleElement);
+            if (text && text !== 'Unknown Position') {
+              jobTitle = text;
+              break;
+            }
+          }
+        }
+      }
+      
+      // If still not found, try finding by text pattern
+      if (jobTitle === 'Unknown Position') {
+        const titleDiv = qScoped('.job-details-jobs-unified-top-card__job-title') || 
+                        q('.job-details-jobs-unified-top-card__job-title');
+        if (titleDiv && mainJobContainer.contains(titleDiv)) {
+          const text = extractText(titleDiv);
+          if (text) {
+            jobTitle = text;
+          }
+        }
       }
 
       // Extract job description from the main content area - return HTML
+      // Focus on main job panel, exclude sidebar job lists
       let jobDescription = '';
 
-      // Get the main job description content - this is the key section
-      const descriptionElement = q('.jobs-description__content .jobs-box__html-content') ||
-        q('.jobs-description__content') ||
-        q('.jobs-box__html-content') ||
-        q('#job-details') ||
-        q('[class*="job-description"]');
+      // Get the main job description content - this is the key section, scoped to main container
+      const descriptionElement = qScoped('.jobs-description__content .jobs-box__html-content') ||
+        qScoped('.jobs-description__content') ||
+        qScoped('.jobs-box__html-content') ||
+        qScoped('#job-details') ||
+        qScoped('[class*="job-description"]') ||
+        // Fallback to global if not found in scoped
+        (q('.jobs-description__content .jobs-box__html-content') && 
+         mainJobContainer.contains(q('.jobs-description__content .jobs-box__html-content')) ? 
+         q('.jobs-description__content .jobs-box__html-content') : null) ||
+        (q('#job-details') && mainJobContainer.contains(q('#job-details')) ? q('#job-details') : null);
 
       if (descriptionElement) {
         // Extract HTML content and clean it up
@@ -417,8 +533,9 @@
         return true;
       }
     } else if (isLinkedInJobPage()) {
-      const titleEl = document.querySelector('.job-details-jobs-unified-top-card__job-title h1 a, .job-details-jobs-unified-top-card__job-title h1, h1 a[href*="/jobs/view/"]');
-      if (titleEl) {
+      const titleEl = document.querySelector('.job-details-jobs-unified-top-card__job-title h1 a, .job-details-jobs-unified-top-card__job-title h1, .job-details-jobs-unified-top-card__sticky-header h2, h1 a[href*="/jobs/view/"], h1.t-24');
+      const companyEl = document.querySelector('.job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name');
+      if (titleEl || companyEl) {
         updateJobData();
         return true;
       }
@@ -472,24 +589,75 @@
       return;
     }
 
+    const extractText = (element) => {
+      if (!element) return '';
+      let text = element.textContent || element.innerText || '';
+      if (!text.trim() && element.childNodes) {
+        text = Array.from(element.childNodes)
+          .filter(node => node.nodeType === Node.TEXT_NODE)
+          .map(node => node.textContent)
+          .join(' ')
+          .trim();
+      }
+      if (!text.trim()) {
+        text = element.innerText || element.textContent || '';
+      }
+      return text.trim();
+    };
+
     console.log('=== LinkedIn Selector Debug ===');
-    console.log('Company selectors:');
-    console.log('.job-details-jobs-unified-top-card__company-name a:', document.querySelector('.job-details-jobs-unified-top-card__company-name a'));
-    console.log('a[href*="/company/"]:', document.querySelector('a[href*="/company/"]'));
+    console.log('Current URL:', window.location.href);
+    
+    console.log('\n--- Company Selectors ---');
+    const companySelectors = [
+      '.job-details-jobs-unified-top-card__company-name a',
+      '.job-details-jobs-unified-top-card__company-name',
+      '.jobs-unified-top-card__company-name a',
+      'a[href*="/company/"]',
+      '.artdeco-entity-lockup__title a'
+    ];
+    companySelectors.forEach(selector => {
+      const el = document.querySelector(selector);
+      if (el) {
+        const text = extractText(el);
+        console.log(`${selector}:`, el, 'Text:', text);
+      } else {
+        console.log(`${selector}:`, 'NOT FOUND');
+      }
+    });
 
-    console.log('Title selectors:');
-    console.log('.job-details-jobs-unified-top-card__job-title h1 a:', document.querySelector('.job-details-jobs-unified-top-card__job-title h1 a'));
-    console.log('h1 a[href*="/jobs/view/"]:', document.querySelector('h1 a[href*="/jobs/view/"]'));
+    console.log('\n--- Title Selectors ---');
+    const titleSelectors = [
+      '.job-details-jobs-unified-top-card__job-title h1 a',
+      '.job-details-jobs-unified-top-card__job-title h1',
+      '.job-details-jobs-unified-top-card__sticky-header h2',
+      'h1 a[href*="/jobs/view/"]',
+      'h1.t-24.t-bold',
+      'h1'
+    ];
+    titleSelectors.forEach(selector => {
+      const el = document.querySelector(selector);
+      if (el) {
+        const text = extractText(el);
+        console.log(`${selector}:`, el, 'Text:', text);
+      } else {
+        console.log(`${selector}:`, 'NOT FOUND');
+      }
+    });
 
-    console.log('Description selectors:');
+    console.log('\n--- Description Selectors ---');
     console.log('.jobs-description__content .jobs-box__html-content:', document.querySelector('.jobs-description__content .jobs-box__html-content'));
     console.log('#job-details:', document.querySelector('#job-details'));
 
-    console.log('Location selectors:');
+    console.log('\n--- Location Selectors ---');
     console.log('.job-details-jobs-unified-top-card__tertiary-description-container .tvm__text:', document.querySelector('.job-details-jobs-unified-top-card__tertiary-description-container .tvm__text'));
 
-    console.log('Job type selectors:');
+    console.log('\n--- Job Type Selectors ---');
     console.log('.job-details-fit-level-preferences button span strong:', document.querySelectorAll('.job-details-fit-level-preferences button span strong'));
+
+    console.log('\n--- Testing scrapeLinkedInJobData() ---');
+    const result = scrapeLinkedInJobData();
+    console.log('Scraping result:', result);
   };
 
   // Debug function to test Indeed selectors
@@ -598,7 +766,97 @@
       sendResponse(result);
     } else if (request.action === 'extractPageHtml') {
       try {
-        const textContent = document.body.innerText || document.body.textContent || '';
+        let textContent = '';
+        
+        // For LinkedIn job pages, focus on the currently viewed job only
+        if (isLinkedInJobPage()) {
+          // Try to get structured data first
+          const structuredData = scrapeLinkedInJobData();
+          if (structuredData && structuredData.company !== 'Unknown Company' && structuredData.position !== 'Unknown Position') {
+            // Use structured data to build focused content
+            textContent = `Job Title: ${structuredData.position}\n`;
+            textContent += `Company: ${structuredData.company}\n`;
+            textContent += `Location: ${structuredData.location}\n`;
+            textContent += `Job Type: ${structuredData.type}\n\n`;
+            textContent += `Job Description:\n${structuredData.description || ''}\n`;
+          } else {
+            // Fallback: Extract only from the main job details panel
+            const mainJobPanel = document.querySelector('.jobs-details__main-content') ||
+                                document.querySelector('.job-details-jobs-unified-top-card__container') ||
+                                document.querySelector('.jobs-description__content') ||
+                                document.querySelector('#job-details');
+            
+            if (mainJobPanel) {
+              // Extract text only from the main job panel, excluding sidebar job lists
+              textContent = mainJobPanel.innerText || mainJobPanel.textContent || '';
+              
+              // Also try to get structured info from the top card
+              const topCard = document.querySelector('.job-details-jobs-unified-top-card__container');
+              if (topCard) {
+                const topCardText = topCard.innerText || topCard.textContent || '';
+                // Prepend top card info if not already included
+                if (!textContent.includes(topCardText.substring(0, 100))) {
+                  textContent = topCardText + '\n\n' + textContent;
+                }
+              }
+            } else {
+              // Last resort: use body but try to exclude job list sidebars
+              const jobListSidebars = document.querySelectorAll('.jobs-search-results-list, .jobs-search__results-list, [class*="jobs-search-results"]');
+              const bodyClone = document.body.cloneNode(true);
+              
+              // Remove job list sidebars from clone
+              jobListSidebars.forEach(sidebar => {
+                const cloneSidebar = bodyClone.querySelector(`[class="${sidebar.className}"]`);
+                if (cloneSidebar) cloneSidebar.remove();
+              });
+              
+              textContent = bodyClone.innerText || bodyClone.textContent || '';
+            }
+          }
+        } 
+        // For Indeed job pages, focus on the main job view
+        else if (isIndeedJobPage()) {
+          const structuredData = scrapeIndeedJobData();
+          if (structuredData && structuredData.company !== 'Unknown Company' && structuredData.position !== 'Unknown Position') {
+            textContent = `Job Title: ${structuredData.position}\n`;
+            textContent += `Company: ${structuredData.company}\n`;
+            textContent += `Location: ${structuredData.location}\n`;
+            textContent += `Job Type: ${structuredData.type}\n`;
+            if (structuredData.salary) {
+              textContent += `Salary: ${structuredData.salary}\n`;
+            }
+            textContent += `\nJob Description:\n${structuredData.description || ''}\n`;
+          } else {
+            // Focus on main job view panel
+            const mainJobView = document.querySelector('#jobDescriptionText') ||
+                               document.querySelector('.jobsearch-JobComponent-description') ||
+                               document.querySelector('#jobsearch-ViewjobPaneWrapper') ||
+                               document.querySelector('.jobsearch-ViewJobLayout--embedded');
+            
+            if (mainJobView) {
+              textContent = mainJobView.innerText || mainJobView.textContent || '';
+            } else {
+              textContent = document.body.innerText || document.body.textContent || '';
+            }
+          }
+        }
+        // For JobRight pages
+        else if (isJobRightJobPage()) {
+          const structuredData = scrapeJobData();
+          if (structuredData && structuredData.company !== 'Unknown Company' && structuredData.position !== 'Unknown Position') {
+            textContent = `Job Title: ${structuredData.position}\n`;
+            textContent += `Company: ${structuredData.company}\n`;
+            textContent += `Location: ${structuredData.location}\n`;
+            textContent += `Job Type: ${structuredData.type}\n\n`;
+            textContent += `Job Description:\n${structuredData.description || ''}\n`;
+          } else {
+            textContent = document.body.innerText || document.body.textContent || '';
+          }
+        }
+        // For other pages, use full body
+        else {
+          textContent = document.body.innerText || document.body.textContent || '';
+        }
 
         const payload = {
           content: textContent.trim(),

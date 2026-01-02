@@ -740,7 +740,8 @@ document.addEventListener('DOMContentLoaded', function () {
           }
 
           function tryExtraction() {
-            chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
+            // First, try to get structured job data (more reliable)
+            chrome.tabs.sendMessage(tabId, { action: 'getJobData' }, async function (structuredResponse) {
               if (chrome.runtime.lastError) {
                 chrome.scripting.executeScript({
                   target: { tabId: tabId },
@@ -755,48 +756,78 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
               }
 
-              if (response && response.ok) {
-                const { content, websiteUrl } = response.payload;
-
-                try {
-                  const extractedData = await extractJobDataWithOpenAI(content, websiteUrl);
-                  
-                  const jobData = {
-                    company: extractedData.company,
-                    position: extractedData.position,
-                    description: extractedData.description,
-                    url: websiteUrl,
-                    selectedEmails: selectedEmails
-                  };
-
-                  const backendResponse = await fetch(API_URLS.SAVE_TO_DASHBOARD, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(jobData)
-                  });
-
-                  const backendData = await backendResponse.json();
-
-                  if (backendResponse.ok) {
-                    alert(`Job extracted and saved successfully! Saved for ${backendData.summary?.saved || 0} user(s).`);
-                  } else {
-                    alert('Failed to save job: ' + (backendData.message || 'Unknown error'));
-                  }
-                } catch (extractionError) {
-                  console.error('Extraction error:', extractionError);
-                  alert('Failed to extract job data: ' + extractionError.message);
-                } finally {
-                  extractBtn.disabled = false;
-                  extractBtn.textContent = 'Extract';
-                }
+              let extractedData = null;
+              
+              // If we got structured data and it's valid, use it
+              if (structuredResponse && structuredResponse.jobData && 
+                  structuredResponse.jobData.company !== 'Unknown Company' && 
+                  structuredResponse.jobData.position !== 'Unknown Position') {
+                extractedData = {
+                  company: structuredResponse.jobData.company,
+                  position: structuredResponse.jobData.position,
+                  description: structuredResponse.jobData.description || ''
+                };
+                console.log('Using structured job data:', extractedData);
+                processExtractedData(extractedData, selectedEmails);
               } else {
-                const errorMsg = response && response.error ? response.error : 'Unknown error';
-                alert('Failed to extract page content: ' + errorMsg);
-                extractBtn.disabled = false;
-                extractBtn.textContent = 'Extract';
+                // Fallback to AI extraction
+                console.log('Structured data not available, falling back to AI extraction');
+                chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
+                  if (chrome.runtime.lastError) {
+                    alert('Failed to communicate with content script. Please refresh the page and try again.');
+                    extractBtn.disabled = false;
+                    extractBtn.textContent = 'Extract';
+                    return;
+                  }
+
+                  if (response && response.ok) {
+                    const { content, websiteUrl } = response.payload;
+
+                    try {
+                      extractedData = await extractJobDataWithOpenAI(content, websiteUrl);
+                      console.log('Using AI-extracted job data:', extractedData);
+                      processExtractedData(extractedData, selectedEmails);
+                    } catch (extractionError) {
+                      console.error('Extraction error:', extractionError);
+                      alert('Failed to extract job data: ' + extractionError.message);
+                      extractBtn.disabled = false;
+                      extractBtn.textContent = 'Extract';
+                    }
+                  } else {
+                    const errorMsg = response && response.error ? response.error : 'Unknown error';
+                    alert('Failed to extract page content: ' + errorMsg);
+                    extractBtn.disabled = false;
+                    extractBtn.textContent = 'Extract';
+                  }
+                });
               }
+            });
+          }
+
+          function processExtractedData(extractedData, selectedEmails) {
+            if (!extractedData) {
+              alert('Failed to extract job data. Please try again.');
+              extractBtn.disabled = false;
+              extractBtn.textContent = 'Extract';
+              return;
+            }
+
+            // Populate form fields with extracted data
+            companyNameInput.value = extractedData.company || '';
+            jobTitleInput.value = extractedData.position || '';
+            jobDescriptionInput.value = extractedData.description || '';
+            
+            // Show the modal so user can review and edit
+            showJobModal();
+            
+            // Reset button state
+            extractBtn.disabled = false;
+            extractBtn.textContent = 'Extract';
+            
+            console.log('Extracted data populated in form:', {
+              company: companyNameInput.value,
+              title: jobTitleInput.value,
+              descriptionLength: jobDescriptionInput.value.length
             });
           }
 
