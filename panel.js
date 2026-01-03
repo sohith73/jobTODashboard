@@ -198,10 +198,20 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!rolesListEl) return;
     rolesListEl.innerHTML = '';
     const clean = normalizeList(roles);
+    
+    if (clean.length === 0) {
+      const emptyMsg = document.createElement('div');
+      emptyMsg.className = 'roles-empty';
+      emptyMsg.textContent = 'No preferred roles set';
+      rolesListEl.appendChild(emptyMsg);
+      return;
+    }
+    
     clean.forEach(role => {
       const chip = document.createElement('span');
       chip.className = 'role-chip';
       chip.textContent = role;
+      chip.title = role; // Tooltip for full text
       rolesListEl.appendChild(chip);
     });
   }
@@ -209,10 +219,20 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!locationsListEl) return;
     locationsListEl.innerHTML = '';
     const clean = normalizeList(locations);
+    
+    if (clean.length === 0) {
+      const emptyMsg = document.createElement('div');
+      emptyMsg.className = 'roles-empty';
+      emptyMsg.textContent = 'No preferred locations set';
+      locationsListEl.appendChild(emptyMsg);
+      return;
+    }
+    
     clean.forEach(loc => {
       const chip = document.createElement('span');
       chip.className = 'role-chip';
       chip.textContent = loc;
+      chip.title = loc; // Tooltip for full text
       locationsListEl.appendChild(chip);
     });
   }
@@ -267,10 +287,10 @@ document.addEventListener('DOMContentLoaded', function () {
     togglePasswordBtn.addEventListener('click', function () {
       if (passwordInput.type === 'password') {
         passwordInput.type = 'text';
-        togglePasswordBtn.textContent = '🙈';
+        togglePasswordBtn.classList.add('show-password');
       } else {
         passwordInput.type = 'password';
-        togglePasswordBtn.textContent = '👁️';
+        togglePasswordBtn.classList.remove('show-password');
       }
     });
   }
@@ -329,6 +349,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    const loginBtn = loginForm.querySelector('.login-btn');
+
+    // Show loading state
+    const originalBtnContent = loginBtn.innerHTML;
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = `
+      <svg class="login-spinner" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-opacity="0.25" fill="none"/>
+        <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+      </svg>
+      <span>Logging in...</span>
+    `;
+    loginBtn.classList.add('loading');
 
     try {
       const isAdmin = /@flashfirehq$/i.test(email.trim());
@@ -347,6 +380,10 @@ document.addEventListener('DOMContentLoaded', function () {
       const data = await response.json();
 
       if (!response.ok) {
+        // Reset button state on error
+        loginBtn.disabled = false;
+        loginBtn.innerHTML = originalBtnContent;
+        loginBtn.classList.remove('loading');
         showMessage(data.message || 'Login failed', 'error');
         return;
       }
@@ -383,6 +420,10 @@ document.addEventListener('DOMContentLoaded', function () {
         renderPreferredLocations(preferredLocations);
       }
     } catch (error) {
+      // Reset button state on error
+      loginBtn.disabled = false;
+      loginBtn.innerHTML = originalBtnContent;
+      loginBtn.classList.remove('loading');
       showMessage('Network error. Please try again.', 'error');
       console.error('Login error:', error);
     }
