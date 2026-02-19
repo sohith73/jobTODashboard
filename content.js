@@ -1050,8 +1050,13 @@
           textContent = document.body.innerText || document.body.textContent || '';
         }
 
+        // Cap size for fast API response (backend also truncates; less data = faster)
+        const maxContentLen = 6000;
+        const trimmed = textContent.trim();
+        const content = trimmed.length > maxContentLen ? trimmed.substring(0, maxContentLen) + '\n[...truncated]' : trimmed;
+
         const payload = {
-          content: textContent.trim(),
+          content: content,
           source: location.hostname,
           websiteUrl: location.href
         };
