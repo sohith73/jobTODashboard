@@ -145,6 +145,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Store URL from extraction/auto-fill to avoid mismatch when user switches tabs before saving
   let lastExtractionSourceUrl = null;
+  let lastExtractionConfidence = 0; // Confidence score from extraction pipeline (0-100)
 
   // Capture the tab ID this panel belongs to at load time.
   // This prevents wrong-tab messaging when the user switches tabs before saving/extracting.
@@ -757,47 +758,35 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Modal functions
   function showJobModal() {
-    // Try to auto-fill from current page if it's a job page.
+    // Always try to auto-fill from the content script's extraction pipeline.
+    // The pipeline now works on ANY job page (not just LinkedIn/Indeed/JobRight).
     // Uses stored panelTabId to always message the correct tab.
     try {
       getMyTabId(function (tabId) {
         if (!tabId) return;
-        chrome.tabs.get(tabId, function (tab) {
-          if (chrome.runtime.lastError || !tab) return;
-          const currentUrl = tab.url || '';
+        chrome.tabs.sendMessage(tabId, { action: 'getJobData' }, function (response) {
+          if (chrome.runtime.lastError) {
+            console.log('Could not auto-fill job data:', chrome.runtime.lastError.message);
+            return;
+          }
+          console.log('Panel received response from content script:', response);
+          if (response && response.jobData) {
+            const jobData = response.jobData;
+            const confidence = response.confidence || 0;
+            console.log('Panel auto-filling with job data (confidence: ' + confidence + '):', jobData);
+            companyNameInput.value = jobData.company || '';
+            jobTitleInput.value = jobData.position || '';
+            jobDescriptionInput.value = jobData.description || '';
+            lastExtractionSourceUrl = jobData.url || null;
+            lastExtractionConfidence = confidence;
 
-          if (currentUrl && (currentUrl.includes('jobright.ai/jobs/info/') ||
-            currentUrl.includes('linkedin.com/jobs/view/') ||
-            currentUrl.includes('linkedin.com/jobs/collections/') ||
-            currentUrl.includes('currentJobId=') ||
-            currentUrl.includes('indeed.com'))) {
-            try {
-              chrome.tabs.sendMessage(tabId, { action: 'getJobData' }, function (response) {
-                if (chrome.runtime.lastError) {
-                  console.log('Could not auto-fill job data:', chrome.runtime.lastError.message);
-                  return;
-                }
-                console.log('Panel received response from content script:', response);
-                if (response && response.jobData) {
-                  const jobData = response.jobData;
-                  console.log('Panel auto-filling with job data:', jobData);
-                  companyNameInput.value = jobData.company || '';
-                  jobTitleInput.value = jobData.position || '';
-                  jobDescriptionInput.value = jobData.description || '';
-                  lastExtractionSourceUrl = jobData.url || null;
-                  console.log('Panel form fields populated:', {
-                    company: companyNameInput.value,
-                    title: jobTitleInput.value,
-                    descriptionLength: jobDescriptionInput.value.length,
-                    descriptionPreview: jobDescriptionInput.value.substring(0, 100) + (jobDescriptionInput.value.length > 100 ? '...' : '')
-                  });
-                } else {
-                  console.log('No job data received from content script');
-                }
-              });
-            } catch (error) {
-              console.log('Could not auto-fill job data:', error);
+            // If confidence is high enough, skip auto-extract (saves API call)
+            if (confidence >= 80) {
+              clearAutoExtractTimer();
+              console.log('High confidence extraction (' + confidence + '), skipping auto-extract');
             }
+          } else {
+            console.log('No job data received from content script');
           }
         });
       });
@@ -812,6 +801,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function hideJobModal() {
     clearAutoExtractTimer();
     lastExtractionSourceUrl = null;
+    lastExtractionConfidence = 0;
     jobModal.classList.add('hidden');
     // Clear form
     companyNameInput.value = '';
@@ -1044,10 +1034,11 @@ document.addEventListener('DOMContentLoaded', function () {
               }
 
               let extractedData = null;
-              
-              // If we got structured data and it's valid, use it
-              if (structuredResponse && structuredResponse.jobData && 
-                  structuredResponse.jobData.company !== 'Unknown Company' && 
+              var confidence = (structuredResponse && structuredResponse.confidence) || 0;
+
+              // If we got structured data with sufficient confidence, use it directly (skip AI)
+              if (structuredResponse && structuredResponse.jobData && confidence >= 50 &&
+                  structuredResponse.jobData.company !== 'Unknown Company' &&
                   structuredResponse.jobData.position !== 'Unknown Position') {
                 extractedData = {
                   company: structuredResponse.jobData.company,
@@ -1055,11 +1046,12 @@ document.addEventListener('DOMContentLoaded', function () {
                   description: structuredResponse.jobData.description || ''
                 };
                 lastExtractionSourceUrl = structuredResponse.jobData.url || null;
-                console.log('Using structured job data:', extractedData);
+                lastExtractionConfidence = confidence;
+                console.log('Using structured job data (confidence: ' + confidence + '):', extractedData);
                 processExtractedData(extractedData, selectedEmails);
               } else {
-                // Fallback to AI extraction
-                console.log('Structured data not available, falling back to AI extraction');
+                // Fallback to AI extraction (confidence < 50 or missing key fields)
+                console.log('Confidence too low (' + confidence + '), falling back to AI extraction');
                 chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
                   if (chrome.runtime.lastError) {
                     alert('Failed to communicate with content script. Please refresh the page and try again.');

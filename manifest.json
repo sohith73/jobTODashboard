@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FlashFire Job Extractor",
-  "version": "1.0",
-  "description": "Extension to extract job data from JobRight, LinkedIn, and Indeed job pages",
+  "version": "2.0",
+  "description": "Extract job data from any job board with smart multi-layer extraction",
   "permissions": [
     "activeTab",
     "tabs",
@@ -28,6 +28,21 @@
         "<all_urls>"
       ],
       "js": [
+        "extractors/namespace.js",
+        "extractors/confidence.js",
+        "extractors/json-ld.js",
+        "extractors/meta-tags.js",
+        "extractors/site-jobright.js",
+        "extractors/site-linkedin.js",
+        "extractors/site-indeed.js",
+        "extractors/site-greenhouse.js",
+        "extractors/site-lever.js",
+        "extractors/site-workday.js",
+        "extractors/site-smartrecruiters.js",
+        "extractors/site-icims.js",
+        "extractors/site-bamboohr.js",
+        "extractors/generic.js",
+        "extractors/pipeline.js",
         "content.js"
       ],
       "run_at": "document_end"
