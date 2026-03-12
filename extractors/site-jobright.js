@@ -122,8 +122,8 @@
       // Company summary
       var summaryEl = u.q('[class*="company-summary"] p') || u.q('[class*="company-summary"]');
       if (summaryEl) {
-        description += '<div class="company-summary"><p>' +
-          (summaryEl.innerHTML || u.extractText(summaryEl)) + '</p></div>';
+        description += '<div class="company-summary">' +
+          u.extractDescriptionHtml(summaryEl) + '</div>';
       }
 
       // Responsibilities
@@ -141,7 +141,7 @@
           if (respItems.length > 0) {
             description += '<div class="responsibilities"><h3>Responsibilities:</h3><ul>';
             for (var ri = 0; ri < respItems.length; ri++) {
-              description += '<li>' + (respItems[ri].innerHTML || u.extractText(respItems[ri])) + '</li>';
+              description += '<li>' + u.extractDescriptionHtml(respItems[ri]) + '</li>';
             }
             description += '</ul></div>';
           }
@@ -162,7 +162,7 @@
           if (qualItems.length > 0) {
             description += '<div class="qualifications"><h3>Qualifications:</h3><ul>';
             for (var qi = 0; qi < qualItems.length; qi++) {
-              description += '<li>' + (qualItems[qi].innerHTML || u.extractText(qualItems[qi])) + '</li>';
+              description += '<li>' + u.extractDescriptionHtml(qualItems[qi]) + '</li>';
             }
             description += '</ul></div>';
           }

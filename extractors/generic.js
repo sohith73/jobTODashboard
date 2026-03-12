@@ -152,7 +152,7 @@
       for (var i = 0; i < descSelectors.length; i++) {
         var el = u.q(descSelectors[i]);
         if (el && (el.innerHTML || '').length >= 100) {
-          return u.cleanHtml(el.innerHTML);
+          return u.extractDescriptionHtml(el);
         }
       }
 
@@ -170,7 +170,7 @@
       });
 
       if (candidates.length > 0) {
-        return u.cleanHtml(candidates[0].innerHTML);
+        return u.extractDescriptionHtml(candidates[0]);
       }
 
       return '';

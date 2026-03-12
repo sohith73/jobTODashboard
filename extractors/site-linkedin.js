@@ -108,8 +108,7 @@
         qScoped('[class*="job-description"]');
 
       if (descEl) {
-        var html = descEl.innerHTML || '';
-        description = '<div class="linkedin-job-description">' + u.cleanHtml(html) + '</div>';
+        description = '<div class="linkedin-job-description">' + u.extractDescriptionHtml(descEl) + '</div>';
       }
 
       // --- Location ---

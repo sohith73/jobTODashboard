@@ -51,7 +51,7 @@
 
       if (descEl) {
         description = '<div class="indeed-job-description">' +
-          u.cleanHtml(descEl.innerHTML) + '</div>';
+          u.extractDescriptionHtml(descEl) + '</div>';
       }
 
       // Fallback: find largest text block in main content area
@@ -72,7 +72,7 @@
               return (cur.textContent || '').length > (best.textContent || '').length ? cur : best;
             });
             description = '<div class="indeed-job-description">' +
-              u.cleanHtml(longest.innerHTML) + '</div>';
+              u.extractDescriptionHtml(longest) + '</div>';
           }
         }
       }

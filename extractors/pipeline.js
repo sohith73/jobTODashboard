@@ -151,7 +151,16 @@
       }
 
       if (focusedEl) {
-        textContent += (focusedEl.innerText || focusedEl.textContent || '');
+        // Use description-only extraction (no a, img, forms) then get plain text
+        var safeHtml = ns.utils.extractDescriptionHtml(focusedEl);
+        if (safeHtml) {
+          var tmp = document.createElement('div');
+          tmp.innerHTML = safeHtml;
+          textContent += (tmp.innerText || tmp.textContent || '').trim();
+        }
+        if (!textContent.trim()) {
+          textContent += (focusedEl.innerText || focusedEl.textContent || '');
+        }
       } else {
         textContent += (document.body.innerText || document.body.textContent || '');
       }
