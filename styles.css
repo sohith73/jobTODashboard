@@ -636,6 +636,10 @@ body {
   padding: 20px;
 }
 
+#extension-code-modal {
+  z-index: 10001;
+}
+
 .modal-content {
   background: white;
   border-radius: 16px;

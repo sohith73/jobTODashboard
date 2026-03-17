@@ -1,7 +1,7 @@
 import { API_URLS } from './exports.js';
 
 const EXTENSION_CODE_STORAGE_KEY = 'extension_operator_code';
-const EXTENSION_CODE_TTL_MS = 24 * 60 * 60 * 1000;
+const EXTENSION_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const API_BASE = API_URLS.SAVE_TO_DASHBOARD.replace('/extension/saveToDashboard', '');
 
 function getStoredExtensionCode() {
@@ -464,12 +464,12 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // Check for existing login data on page load
-  function checkExistingLogin() {
+  async function checkExistingLogin() {
     const savedUsers = loadLoginData();
     if (savedUsers && savedUsers.length > 0) {
       allUsers = savedUsers;
       selectedUsers = [];
-      
+
       // Load selected client if exists
       const savedClient = loadSelectedClient();
       if (savedClient && savedClient.email) {
@@ -481,10 +481,18 @@ document.addEventListener('DOMContentLoaded', function () {
           selectedUsers = [clientUser._id];
         }
       }
-      
+
       renderUsers(allUsers);
       loginContainer.classList.add('hidden');
       mainContainer.classList.remove('hidden');
+
+      // Prompt for operator code if not cached
+      if (!getStoredExtensionCode()) {
+        const codeResult = await showExtensionCodeModal();
+        if (!codeResult) {
+          showMessage('Operator code is required. Get your code from admin.', 'error');
+        }
+      }
       return;
     }
     const savedClient = loadClientLogin();
@@ -510,6 +518,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       }
       renderPreferredLocations(cachedLocs);
+
+      // Prompt for operator code if not cached
+      if (!getStoredExtensionCode()) {
+        const codeResult = await showExtensionCodeModal();
+        if (!codeResult) {
+          showMessage('Operator code is required. Get your code from admin.', 'error');
+        }
+      }
     }
   }
 
@@ -622,20 +638,41 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
 
+      // Prompt for operator code right after login (for both admin and client logins)
+      // If no cached code, ask immediately. Keep asking until they enter one.
+      if (!getStoredExtensionCode()) {
+        let codeResult = null;
+        while (!codeResult) {
+          codeResult = await showExtensionCodeModal();
+          if (!codeResult) {
+            // They cancelled - show a message and re-prompt
+            const retry = confirm('Operator code is required to use this extension. Would you like to try again?');
+            if (!retry) {
+              // Reset login state and go back to login screen
+              loginBtn.disabled = false;
+              loginBtn.innerHTML = originalBtnContent;
+              loginBtn.classList.remove('loading');
+              showMessage('Operator code is required. Please get your code from admin.', 'error');
+              return;
+            }
+          }
+        }
+      }
+
       if (isAdmin) {
         allUsers = data.users || [];
         selectedUsers = [];
         operatorEmail = data.operatorEmail || email;
         operatorName = data.operatorName || '';
         saveLoginData(allUsers);
-        
+
         // Load previously selected client if exists
         const savedClient = loadSelectedClient();
         if (savedClient && savedClient.email) {
           selectedClientEmail = savedClient.email;
           selectedClientName = savedClient.name;
         }
-        
+
         renderUsers(allUsers);
         loginContainer.classList.add('hidden');
         mainContainer.classList.remove('hidden');
@@ -864,16 +901,13 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
-    let extensionCodeToSend = undefined;
-    if (operatorEmail && operatorEmail.endsWith('@flashfirehq')) {
-      const ext = await getOrPromptExtensionCode();
-      if (!ext) {
-        alert('Operator code is required to add jobs.');
-        saveJobBtn.disabled = false;
-        return;
-      }
-      extensionCodeToSend = ext.code;
+    const ext = await getOrPromptExtensionCode();
+    if (!ext) {
+      alert('Operator code is required to add jobs.');
+      saveJobBtn.disabled = false;
+      return;
     }
+    const extensionCodeToSend = ext.code;
 
     const isOperator = operatorEmail && operatorEmail.endsWith('@flashfirehq');
     const baseJobData = {
@@ -883,7 +917,7 @@ document.addEventListener('DOMContentLoaded', function () {
       selectedEmails,
       savedAt: new Date().toISOString(),
       operatorEmail: isOperator ? operatorEmail : undefined,
-      operatorName: isOperator ? operatorName : undefined,
+      operatorName: isOperator ? operatorName : (ext ? ext.name : undefined),
       extensionCode: extensionCodeToSend
     };
 
