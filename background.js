@@ -1,29 +1,42 @@
-// Open panel: never reload the tab and never re-inject scripts (manifest content_scripts already run).
-// Re-injecting content.js caused duplicate listeners / wrong toggle behavior and felt like a refresh.
+// All content script files in load order (must match manifest.json)
+const CONTENT_SCRIPTS = [
+  'extractors/namespace.js',
+  'extractors/confidence.js',
+  'extractors/json-ld.js',
+  'extractors/meta-tags.js',
+  'extractors/site-jobright.js',
+  'extractors/site-linkedin.js',
+  'extractors/site-indeed.js',
+  'extractors/site-greenhouse.js',
+  'extractors/site-lever.js',
+  'extractors/site-workday.js',
+  'extractors/site-smartrecruiters.js',
+  'extractors/site-icims.js',
+  'extractors/site-bamboohr.js',
+  'extractors/generic.js',
+  'extractors/pipeline.js',
+  'content.js'
+];
 
 chrome.action.onClicked.addListener((tab) => {
   const tabId = tab.id;
   const payload = { action: 'togglePanel', hostTabId: tabId };
 
-  const delays = [0, 80, 200, 400, 700];
-  let attempt = 0;
-
-  function trySend() {
+  const tryOpen = () => {
     chrome.tabs.sendMessage(tabId, payload, () => {
       if (chrome.runtime.lastError) {
-        attempt += 1;
-        if (attempt < delays.length) {
-          setTimeout(trySend, delays[attempt]);
-        } else {
-          console.warn(
-            '[FlashFire] Could not open panel (content script not reachable).',
-            chrome.runtime.lastError?.message,
-            'If this tab was open before installing the extension, switch tabs or open a new tab once — the extension never reloads the page.'
-          );
-        }
+        chrome.scripting
+          .executeScript({
+            target: { tabId },
+            files: CONTENT_SCRIPTS,
+          })
+          .then(() => {
+            setTimeout(() => chrome.tabs.sendMessage(tabId, payload, () => {}), 300);
+          })
+          .catch((e) => console.error('Failed to inject:', e));
       }
     });
-  }
+  };
 
-  trySend();
+  tryOpen();
 });

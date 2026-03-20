@@ -1251,21 +1251,20 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
           }
 
-          function tryExtraction(getDataAttempt) {
-            const attempt = typeof getDataAttempt === 'number' ? getDataAttempt : 0;
+          function tryExtraction() {
+            // First, try to get structured job data (more reliable)
             chrome.tabs.sendMessage(tabId, { action: 'getJobData' }, async function (structuredResponse) {
               if (chrome.runtime.lastError) {
-                if (attempt < 6) {
-                  setTimeout(function () {
-                    tryExtraction(attempt + 1);
-                  }, attempt === 0 ? 40 : 120 * attempt);
-                  return;
-                }
-                alert(
-                  'Could not reach this tab from the extension. Close the panel, click the extension icon again, or load this job in a new tab. Nothing was reloaded.'
-                );
-                extractBtn.disabled = false;
-                extractBtn.classList.remove('loading');
+                chrome.scripting.executeScript({
+                  target: { tabId: tabId },
+                  files: ['content.js']
+                }).then(() => {
+                  setTimeout(tryExtraction, 1000);
+                }).catch((error) => {
+                  alert('Failed to inject content script. Please refresh the page and try again.');
+                  extractBtn.disabled = false;
+                  extractBtn.classList.remove('loading');
+                });
                 return;
               }
 
@@ -1288,19 +1287,9 @@ document.addEventListener('DOMContentLoaded', function () {
               } else {
                 // Fallback to AI extraction (confidence < 50 or missing key fields)
                 console.log('Confidence too low (' + confidence + '), falling back to AI extraction');
-                function sendExtractHtml(htmlAttempt) {
-                  const h = typeof htmlAttempt === 'number' ? htmlAttempt : 0;
-                  chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
+                chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
                   if (chrome.runtime.lastError) {
-                    if (h < 5) {
-                      setTimeout(function () {
-                        sendExtractHtml(h + 1);
-                      }, h === 0 ? 40 : 100 * h);
-                      return;
-                    }
-                    alert(
-                      'Could not read the page from the extension. Try opening the panel again. Your tab was not reloaded.'
-                    );
+                    alert('Failed to communicate with content script. Please refresh the page and try again.');
                     extractBtn.disabled = false;
                     extractBtn.classList.remove('loading');
                     return;
@@ -1335,8 +1324,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     extractBtn.classList.remove('loading');
                   }
                 });
-                }
-                sendExtractHtml(0);
               }
             });
           }
