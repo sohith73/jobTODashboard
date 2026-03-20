@@ -1,4 +1,23 @@
 (function () {
+  // Tab that opened the panel (from background); avoids wrong URL when activeTab != host page
+  var hostTabIdForPanel = null;
+
+  function notifyIframeHostTabId() {
+    if (hostTabIdForPanel == null) return;
+    var panel = document.getElementById('extension-panel');
+    if (!panel || panel.style.display !== 'block') return;
+    var iframe = panel.querySelector('iframe');
+    if (!iframe || !iframe.contentWindow) return;
+    try {
+      iframe.contentWindow.postMessage(
+        { type: 'FF_HOST_TAB_ID', tabId: hostTabIdForPanel },
+        '*'
+      );
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   // Prevent double-initialization
   if (document.getElementById('extension-panel')) {
     togglePanel();
@@ -90,8 +109,22 @@
   // --- Message Handler ---
   chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     if (request.action === 'togglePanel') {
+      if (request.hostTabId != null) {
+        hostTabIdForPanel = request.hostTabId;
+      } else if (sender && sender.tab && sender.tab.id != null) {
+        hostTabIdForPanel = sender.tab.id;
+      }
       togglePanel();
+      setTimeout(notifyIframeHostTabId, 0);
+      setTimeout(notifyIframeHostTabId, 200);
+      setTimeout(notifyIframeHostTabId, 600);
       sendResponse({ success: true });
+
+    } else if (request.action === 'getPageLoadStatus') {
+      sendResponse({
+        readyState: document.readyState,
+        url: location.href,
+      });
 
     } else if (request.action === 'getJobData') {
       // Re-extract if we don't have data or confidence is low
@@ -207,6 +240,11 @@
   function togglePanel() {
     var p = document.getElementById('extension-panel');
     if (!p) return;
-    p.style.display = p.style.display === 'block' ? 'none' : 'block';
+    var opening = p.style.display !== 'block';
+    p.style.display = opening ? 'block' : 'none';
+    if (opening) {
+      setTimeout(notifyIframeHostTabId, 0);
+      setTimeout(notifyIframeHostTabId, 200);
+    }
   }
 })();

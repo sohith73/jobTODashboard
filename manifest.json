@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "FlashFire Job Extractor",
-  "version": "2.0",
+  "version": "2.0.1",
   "description": "Extract job data from any job board with smart multi-layer extraction",
   "permissions": [
     "activeTab",
-    "tabs",
-    "scripting"
+    "tabs"
   ],
   "host_permissions": [
     "http://localhost:8086/*",

@@ -96,7 +96,8 @@
           <div class="roles-title">Preferred Locations</div>
           <div id="client-preferred-locations" class="roles-list"></div>
         </div>
-        <button id="client-save" class="client-action-btn">Save to Dashboard</button>
+        <button id="client-save" class="client-action-btn" type="button">Save to Dashboard</button>
+        <p id="client-page-load-hint" class="page-load-hint page-load-hint--wait hidden" role="status"></p>
         <a id="client-visit" href="https://frontend-dashboard-sohith.vercel.app/" target="_blank"
           class="client-action-btn">Visit Dashboard</a>
       </div>
@@ -132,7 +133,7 @@
         <button id="close-extension-code-modal" class="close-modal">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="extension-code-hint">Enter the 5-digit code to add jobs as an operator. Code is saved for 30 days.</p>
+        <p class="extension-code-hint">Enter the 5-digit code to add jobs as an operator. Code is saved for 90 days.</p>
         <div class="input-group">
           <label for="extension-code-input">Code</label>
           <input type="text" id="extension-code-input" inputmode="numeric" pattern="[0-9]*" maxlength="5" placeholder="12345" autocomplete="off">
@@ -168,7 +169,13 @@
         <div class="input-group">
           <label for="job-url">Job URL</label>
           <input type="url" id="job-url" placeholder="https://...">
-          <span class="job-url-hint">Verify this matches the job page you're saving</span>
+          <span class="job-url-hint">Updated from this browser tab when you save (after the page has finished loading)</span>
+        </div>
+        <p id="modal-page-load-hint" class="page-load-hint" role="status"></p>
+        <div class="input-group extension-code-row" id="extension-code-row">
+          <label for="extension-code-display">Operator code (saved in extension)</label>
+          <input type="text" id="extension-code-display" readonly class="extension-code-readonly" value="" placeholder="Verify code when saving — not set yet" autocomplete="off">
+          <span class="job-url-hint">5-digit code from admin; stored locally for 90 days after verification</span>
         </div>
       </div>
       <div class="modal-footer">

@@ -1,43 +1,29 @@
-// All content script files in load order (must match manifest.json)
-const CONTENT_SCRIPTS = [
-  'extractors/namespace.js',
-  'extractors/confidence.js',
-  'extractors/json-ld.js',
-  'extractors/meta-tags.js',
-  'extractors/site-jobright.js',
-  'extractors/site-linkedin.js',
-  'extractors/site-indeed.js',
-  'extractors/site-greenhouse.js',
-  'extractors/site-lever.js',
-  'extractors/site-workday.js',
-  'extractors/site-smartrecruiters.js',
-  'extractors/site-icims.js',
-  'extractors/site-bamboohr.js',
-  'extractors/generic.js',
-  'extractors/pipeline.js',
-  'content.js'
-];
+// Open panel: never reload the tab and never re-inject scripts (manifest content_scripts already run).
+// Re-injecting content.js caused duplicate listeners / wrong toggle behavior and felt like a refresh.
 
 chrome.action.onClicked.addListener((tab) => {
   const tabId = tab.id;
-  const openPanelAfterRefresh = () => {
-    chrome.tabs.sendMessage(tabId, { action: 'togglePanel' }, (err) => {
+  const payload = { action: 'togglePanel', hostTabId: tabId };
+
+  const delays = [0, 80, 200, 400, 700];
+  let attempt = 0;
+
+  function trySend() {
+    chrome.tabs.sendMessage(tabId, payload, () => {
       if (chrome.runtime.lastError) {
-        chrome.scripting.executeScript({
-          target: { tabId },
-          files: CONTENT_SCRIPTS
-        }).then(() => {
-          setTimeout(() => chrome.tabs.sendMessage(tabId, { action: 'togglePanel' }), 300);
-        }).catch((e) => console.error('Failed to inject:', e));
+        attempt += 1;
+        if (attempt < delays.length) {
+          setTimeout(trySend, delays[attempt]);
+        } else {
+          console.warn(
+            '[FlashFire] Could not open panel (content script not reachable).',
+            chrome.runtime.lastError?.message,
+            'If this tab was open before installing the extension, switch tabs or open a new tab once — the extension never reloads the page.'
+          );
+        }
       }
     });
-  };
+  }
 
-  const onUpdated = (updatedTabId, changeInfo) => {
-    if (updatedTabId !== tabId || changeInfo.status !== 'complete') return;
-    chrome.tabs.onUpdated.removeListener(onUpdated);
-    setTimeout(openPanelAfterRefresh, 200);
-  };
-  chrome.tabs.onUpdated.addListener(onUpdated);
-  chrome.tabs.reload(tabId);
+  trySend();
 });

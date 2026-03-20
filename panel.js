@@ -1,7 +1,7 @@
 import { API_URLS } from './exports.js';
 
 const EXTENSION_CODE_STORAGE_KEY = 'extension_operator_code';
-const EXTENSION_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const EXTENSION_CODE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const API_BASE = API_URLS.SAVE_TO_DASHBOARD.replace('/extension/saveToDashboard', '');
 
 function getStoredExtensionCode() {
@@ -25,6 +25,19 @@ function saveExtensionCodeCache(code, name) {
       expiresAt: Date.now() + EXTENSION_CODE_TTL_MS
     }));
   } catch (e) {}
+}
+
+function refreshExtensionCodeDisplay() {
+  const el = document.getElementById('extension-code-display');
+  if (!el) return;
+  const stored = getStoredExtensionCode();
+  if (stored && stored.code) {
+    el.value = stored.code;
+    el.placeholder = '';
+  } else {
+    el.value = '';
+    el.placeholder = 'Not verified yet — you will enter code when you save';
+  }
 }
 
 function verifyExtensionCodeApi(code) {
@@ -72,6 +85,7 @@ function showExtensionCodeModal() {
         const result = await verifyExtensionCodeApi(code);
         if (result.valid && result.name !== undefined) {
           saveExtensionCodeCache(code, result.name);
+          refreshExtensionCodeDisplay();
           done({ code, name: result.name });
         } else {
           errorEl.textContent = result.error || 'Invalid code.';
@@ -132,6 +146,8 @@ document.addEventListener('DOMContentLoaded', function () {
   const jobTitleInput = document.getElementById('job-title');
   const jobDescriptionInput = document.getElementById('job-description');
   const jobUrlInput = document.getElementById('job-url');
+  const clientPageLoadHintEl = document.getElementById('client-page-load-hint');
+  const modalPageLoadHintEl = document.getElementById('modal-page-load-hint');
 
   let allUsers = [];
   let selectedUsers = [];
@@ -151,10 +167,19 @@ document.addEventListener('DOMContentLoaded', function () {
   // Capture the tab ID this panel belongs to at load time.
   // This prevents wrong-tab messaging when the user switches tabs before saving/extracting.
   let panelTabId = null;
+  let pageLoadPollTimer = null;
+
+  window.addEventListener('message', function (ev) {
+    if (!ev.data || ev.data.type !== 'FF_HOST_TAB_ID') return;
+    if (ev.data.tabId != null) {
+      panelTabId = ev.data.tabId;
+    }
+  });
+
   (function captureTabId() {
     if (chrome && chrome.tabs && chrome.tabs.query) {
       chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-        if (tabs && tabs[0]) {
+        if (tabs && tabs[0] && panelTabId == null) {
           panelTabId = tabs[0].id;
         }
       });
@@ -204,6 +229,112 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       });
     }
+  }
+
+  /** Tab load + document readyState (content script). Used for gating save and fresh job URL. */
+  function getPageLoadStatusForMyTab(callback) {
+    getMyTabId(function (tabId) {
+      if (!tabId || !chrome.tabs || !chrome.tabs.get) {
+        callback({
+          ok: false,
+          chromeTabUrl: '',
+          tabStatus: '',
+          readyState: '',
+        });
+        return;
+      }
+      chrome.tabs.get(tabId, function (tab) {
+        if (chrome.runtime.lastError || !tab) {
+          callback({
+            ok: false,
+            chromeTabUrl: '',
+            tabStatus: '',
+            readyState: '',
+          });
+          return;
+        }
+        const tabComplete = tab.status === 'complete';
+        const chromeTabUrl = tab.url || '';
+        chrome.tabs.sendMessage(tabId, { action: 'getPageLoadStatus' }, function (resp) {
+          const err = chrome.runtime.lastError;
+          let docReady = true;
+          if (!err && resp && resp.readyState === 'loading') {
+            docReady = false;
+          }
+          const ok = tabComplete && docReady;
+          callback({
+            ok,
+            chromeTabUrl,
+            tabStatus: tab.status,
+            readyState: err || !resp ? 'unknown' : resp.readyState,
+          });
+        });
+      });
+    });
+  }
+
+  function stopPageLoadPolling() {
+    if (pageLoadPollTimer) {
+      clearInterval(pageLoadPollTimer);
+      pageLoadPollTimer = null;
+    }
+  }
+
+  function updatePageLoadIndicators() {
+    if (typeof chrome === 'undefined' || !chrome.tabs) return;
+    const inClientView = clientContainer && !clientContainer.classList.contains('hidden');
+    const inMainView = mainContainer && !mainContainer.classList.contains('hidden');
+    const modalOpen = jobModal && !jobModal.classList.contains('hidden');
+    if (!inClientView && !inMainView && !modalOpen) return;
+
+    getPageLoadStatusForMyTab(function (s) {
+      const waitMsg =
+        'Page is still loading — wait until it finishes before saving.';
+      const okMsg = 'Page ready. Job URL will be taken from this tab when you save.';
+
+      if (inClientView && clientSaveBtn) {
+        clientSaveBtn.disabled = !s.ok;
+      }
+      if (clientPageLoadHintEl) {
+        if (inClientView) {
+          if (s.ok) {
+            clientPageLoadHintEl.classList.add('hidden');
+            clientPageLoadHintEl.textContent = '';
+          } else {
+            clientPageLoadHintEl.classList.remove('hidden');
+            clientPageLoadHintEl.textContent = waitMsg;
+            clientPageLoadHintEl.classList.remove('page-load-hint--ok');
+            clientPageLoadHintEl.classList.add('page-load-hint--wait');
+          }
+        }
+      }
+
+      if (inMainView && addJobsBtn) {
+        addJobsBtn.disabled = !s.ok;
+      }
+
+      if (modalOpen) {
+        if (modalPageLoadHintEl) {
+          modalPageLoadHintEl.textContent = s.ok ? okMsg : waitMsg;
+          modalPageLoadHintEl.classList.toggle('page-load-hint--wait', !s.ok);
+          modalPageLoadHintEl.classList.toggle('page-load-hint--ok', s.ok);
+        }
+        if (saveJobBtn) saveJobBtn.disabled = !s.ok;
+        if (extractBtn) {
+          const extracting = extractBtn.classList.contains('loading');
+          extractBtn.disabled = !s.ok || extracting;
+        }
+      } else {
+        if (saveJobBtn) saveJobBtn.disabled = false;
+        if (extractBtn) extractBtn.disabled = false;
+      }
+    });
+  }
+
+  function startPageLoadPolling() {
+    stopPageLoadPolling();
+    pageLoadPollTimer = setInterval(updatePageLoadIndicators, 700);
+    updatePageLoadIndicators();
   }
 
   function isJobFormEmpty() {
@@ -485,6 +616,7 @@ document.addEventListener('DOMContentLoaded', function () {
       renderUsers(allUsers);
       loginContainer.classList.add('hidden');
       mainContainer.classList.remove('hidden');
+      startPageLoadPolling();
 
       // Prompt for operator code if not cached
       if (!getStoredExtensionCode()) {
@@ -518,6 +650,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       }
       renderPreferredLocations(cachedLocs);
+      startPageLoadPolling();
 
       // Prompt for operator code if not cached
       if (!getStoredExtensionCode()) {
@@ -676,6 +809,7 @@ document.addEventListener('DOMContentLoaded', function () {
         renderUsers(allUsers);
         loginContainer.classList.add('hidden');
         mainContainer.classList.remove('hidden');
+        startPageLoadPolling();
       } else {
         const userDetails = (data && data.userDetails) ? data.userDetails : {};
         const token = data && data.token ? data.token : '';
@@ -699,6 +833,7 @@ document.addEventListener('DOMContentLoaded', function () {
         setClientGreeting(loggedInName, loggedInEmail);
         renderPreferredRoles(preferredRoles);
         renderPreferredLocations(preferredLocations);
+        startPageLoadPolling();
       }
     } catch (error) {
       // Reset button state on error
@@ -722,6 +857,12 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   if (clientLogoutBtn) {
     clientLogoutBtn.addEventListener('click', function () {
+      stopPageLoadPolling();
+      if (clientSaveBtn) clientSaveBtn.disabled = false;
+      if (clientPageLoadHintEl) {
+        clientPageLoadHintEl.classList.add('hidden');
+        clientPageLoadHintEl.textContent = '';
+      }
       clearLoginData();
       try { localStorage.removeItem('extension_client_roles'); } catch (e) { }
       try { localStorage.removeItem('extension_client_token'); } catch (e) { }
@@ -780,6 +921,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Handle logout button
   logoutBtn.addEventListener('click', function () {
+    stopPageLoadPolling();
+    if (addJobsBtn) addJobsBtn.disabled = false;
     clearLoginData();
     allUsers = [];
     selectedUsers = [];
@@ -796,6 +939,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Modal functions
   function showJobModal() {
+    refreshExtensionCodeDisplay();
     // Always try to auto-fill from the content script's extraction pipeline.
     // The pipeline now works on ANY job page (not just LinkedIn/Indeed/JobRight).
     // Uses stored panelTabId to always message the correct tab.
@@ -849,6 +993,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     jobModal.classList.remove('hidden');
     scheduleAutoExtract();
+    updatePageLoadIndicators();
   }
 
   function hideJobModal() {
@@ -861,10 +1006,17 @@ document.addEventListener('DOMContentLoaded', function () {
     jobTitleInput.value = '';
     jobDescriptionInput.value = '';
     if (jobUrlInput) jobUrlInput.value = '';
-    // Reset Save Job button text
-    const saveJobBtn = document.getElementById('save-job');
     if (saveJobBtn) {
       saveJobBtn.classList.remove('has-extracted');
+      saveJobBtn.disabled = false;
+    }
+    if (extractBtn) {
+      extractBtn.disabled = false;
+      extractBtn.classList.remove('loading');
+    }
+    if (modalPageLoadHintEl) {
+      modalPageLoadHintEl.textContent = '';
+      modalPageLoadHintEl.classList.remove('page-load-hint--wait', 'page-load-hint--ok');
     }
   }
 
@@ -881,6 +1033,15 @@ document.addEventListener('DOMContentLoaded', function () {
     // Prevent double-click / race condition: disable save until request completes
     if (saveJobBtn.disabled) return;
     saveJobBtn.disabled = true;
+
+    const pageStatus = await new Promise((resolve) => {
+      getPageLoadStatusForMyTab(resolve);
+    });
+    if (!pageStatus.ok) {
+      alert('This page is still loading. Wait until it finishes, then try again.');
+      saveJobBtn.disabled = false;
+      return;
+    }
 
     let selectedEmails = [];
     if (operatorEmail && operatorEmail.endsWith('@flashfirehq')) {
@@ -917,23 +1078,28 @@ document.addEventListener('DOMContentLoaded', function () {
       selectedEmails,
       savedAt: new Date().toISOString(),
       operatorEmail: isOperator ? operatorEmail : undefined,
-      operatorName: isOperator ? operatorName : (ext ? ext.name : undefined),
       extensionCode: extensionCodeToSend
     };
 
-    // Use URL from form (user can verify/edit), then extraction, then tab lookup.
-    let urlToUse = (jobUrlInput && jobUrlInput.value) ? jobUrlInput.value.trim() : null;
-    if (!urlToUse) urlToUse = lastExtractionSourceUrl;
+    // Prefer live tab URL from Chrome (correct tab); then form / extraction fallbacks.
+    let urlToUse =
+      pageStatus.chromeTabUrl && /^https?:/i.test(pageStatus.chromeTabUrl)
+        ? pageStatus.chromeTabUrl.trim()
+        : (jobUrlInput && jobUrlInput.value.trim()) || lastExtractionSourceUrl || null;
     if (!urlToUse) {
       try {
-        urlToUse = await new Promise((resolve) => {
-          getMyTabUrl(resolve);
-        });
+        urlToUse = await new Promise((resolve) => getMyTabUrl(resolve));
       } catch (e) {
-        urlToUse = 'Unknown URL';
+        urlToUse = null;
       }
     }
+    if ((!urlToUse || urlToUse === 'Unknown URL') && pageStatus.chromeTabUrl) {
+      urlToUse = pageStatus.chromeTabUrl;
+    }
     if (!urlToUse) urlToUse = 'Unknown URL';
+    if (jobUrlInput && urlToUse && urlToUse !== 'Unknown URL') {
+      jobUrlInput.value = urlToUse;
+    }
 
     const jobData = { ...baseJobData, url: urlToUse };
     lastExtractionSourceUrl = null; // Clear after use
@@ -951,7 +1117,12 @@ document.addEventListener('DOMContentLoaded', function () {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(jobData)
       });
-      const responseData = await response.json();
+      let responseData = {};
+      try {
+        responseData = await response.json();
+      } catch (parseErr) {
+        responseData = {};
+      }
       if (response.ok) {
         const summary = responseData.summary || {};
         if (summary.skippedAsDuplicate > 0 && summary.saved === 0) {
@@ -962,9 +1133,21 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
           alert(responseData.message || 'Job saving process completed.');
         }
-      } else {
-        alert('Failed to save job: ' + (responseData.message || 'Unknown error'));
+        return;
       }
+      const errCode = responseData.error;
+      if (errCode === 'INVALID_EXTENSION_CODE' || errCode === 'EXTENSION_CODE_REQUIRED') {
+        try {
+          localStorage.removeItem(EXTENSION_CODE_STORAGE_KEY);
+        } catch (clearErr) {}
+        refreshExtensionCodeDisplay();
+        alert(
+          responseData.message ||
+            'Your operator code is missing or no longer valid. Enter a new 5-digit code when you save again.'
+        );
+        return;
+      }
+      alert('Failed to save job: ' + (responseData.message || response.statusText || 'Unknown error'));
     } catch (error) {
       alert('Error saving job: ' + error.message);
     }
@@ -1068,20 +1251,21 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
           }
 
-          function tryExtraction() {
-            // First, try to get structured job data (more reliable)
+          function tryExtraction(getDataAttempt) {
+            const attempt = typeof getDataAttempt === 'number' ? getDataAttempt : 0;
             chrome.tabs.sendMessage(tabId, { action: 'getJobData' }, async function (structuredResponse) {
               if (chrome.runtime.lastError) {
-                chrome.scripting.executeScript({
-                  target: { tabId: tabId },
-                  files: ['content.js']
-                }).then(() => {
-                  setTimeout(tryExtraction, 1000);
-                }).catch((error) => {
-                  alert('Failed to inject content script. Please refresh the page and try again.');
-                  extractBtn.disabled = false;
-                  extractBtn.classList.remove('loading');
-                });
+                if (attempt < 6) {
+                  setTimeout(function () {
+                    tryExtraction(attempt + 1);
+                  }, attempt === 0 ? 40 : 120 * attempt);
+                  return;
+                }
+                alert(
+                  'Could not reach this tab from the extension. Close the panel, click the extension icon again, or load this job in a new tab. Nothing was reloaded.'
+                );
+                extractBtn.disabled = false;
+                extractBtn.classList.remove('loading');
                 return;
               }
 
@@ -1104,9 +1288,19 @@ document.addEventListener('DOMContentLoaded', function () {
               } else {
                 // Fallback to AI extraction (confidence < 50 or missing key fields)
                 console.log('Confidence too low (' + confidence + '), falling back to AI extraction');
-                chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
+                function sendExtractHtml(htmlAttempt) {
+                  const h = typeof htmlAttempt === 'number' ? htmlAttempt : 0;
+                  chrome.tabs.sendMessage(tabId, { action: 'extractPageHtml' }, async function (response) {
                   if (chrome.runtime.lastError) {
-                    alert('Failed to communicate with content script. Please refresh the page and try again.');
+                    if (h < 5) {
+                      setTimeout(function () {
+                        sendExtractHtml(h + 1);
+                      }, h === 0 ? 40 : 100 * h);
+                      return;
+                    }
+                    alert(
+                      'Could not read the page from the extension. Try opening the panel again. Your tab was not reloaded.'
+                    );
                     extractBtn.disabled = false;
                     extractBtn.classList.remove('loading');
                     return;
@@ -1141,6 +1335,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     extractBtn.classList.remove('loading');
                   }
                 });
+                }
+                sendExtractHtml(0);
               }
             });
           }

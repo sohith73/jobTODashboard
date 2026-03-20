@@ -24,6 +24,29 @@ body {
   display: none !important;
 }
 
+.page-load-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 8px 0 0;
+  color: #64748b;
+}
+
+.page-load-hint--wait {
+  color: #b45309;
+  font-weight: 500;
+}
+
+.page-load-hint--ok {
+  color: #15803d;
+  font-size: 11px;
+}
+
+.client-action-btn:disabled,
+.add-jobs-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* ========== LOGIN CONTAINER ========== */
 #login-container {
   width: 100%;
@@ -771,6 +794,19 @@ body {
   margin-top: 6px;
   font-size: 11px;
   color: #6b7280;
+}
+
+.modal-body .input-group input.extension-code-readonly {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  cursor: default;
+  font-weight: 600;
+}
+
+.modal-body .input-group input.extension-code-readonly:focus {
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  box-shadow: none;
 }
 
 .modal-footer {
