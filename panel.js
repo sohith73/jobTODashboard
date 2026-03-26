@@ -1,6 +1,102 @@
 import { API_URLS } from './exports.js';
 
 const EXTENSION_CODE_STORAGE_KEY = 'extension_operator_code';
+
+/** Short-lived cache so repeated saves stay fast (same logic as dashboard backend). */
+let exclusionListCache = { key: '', companies: [], locations: [], at: 0 };
+const EXCLUSION_CACHE_MS = 60 * 1000;
+
+function normEx(s) {
+  if (!s || typeof s !== 'string') return '';
+  return s.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function buildExclusionSets(excludedCompanies, excludedLocations) {
+  const companySet = new Set();
+  for (const c of excludedCompanies || []) {
+    const n = normEx(String(c));
+    if (n) companySet.add(n);
+  }
+  const locationExactSet = new Set();
+  const locationTokenSet = new Set();
+  for (const loc of excludedLocations || []) {
+    const n = normEx(String(loc));
+    if (!n) continue;
+    locationExactSet.add(n);
+    for (const t of n.split(/[\s,;/|]+/).map((x) => x.trim()).filter(Boolean)) {
+      if (t.length >= 2) locationTokenSet.add(t);
+    }
+  }
+  return { companySet, locationExactSet, locationTokenSet };
+}
+
+const UNKNOWN_COMPANY = new Set(['unknown', 'unknown company', 'n/a', 'na']);
+
+function isCompanyBlockedLocal(company, companySet) {
+  const n = normEx(company);
+  if (!n || UNKNOWN_COMPANY.has(n)) return false;
+  return companySet.has(n);
+}
+
+function isLocationBlockedLocal(location, locationExactSet, locationTokenSet) {
+  const n = normEx(location);
+  if (!n) return false;
+  if (locationExactSet.has(n)) return true;
+  for (const t of n.split(/[\s,;/|]+/).map((x) => x.trim()).filter(Boolean)) {
+    if (t.length >= 2 && locationTokenSet.has(t)) return true;
+  }
+  return false;
+}
+
+async function fetchExclusionListsForClient(extensionCode, clientEmail) {
+  const key = `${String(extensionCode).trim()}|${String(clientEmail).toLowerCase().trim()}`;
+  if (
+    exclusionListCache.key === key &&
+    Date.now() - exclusionListCache.at < EXCLUSION_CACHE_MS
+  ) {
+    return {
+      excludedCompanies: exclusionListCache.companies,
+      excludedLocations: exclusionListCache.locations
+    };
+  }
+  const res = await fetch(API_URLS.EXCLUSION_LISTS, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      extensionCode: String(extensionCode).trim(),
+      clientEmail: String(clientEmail).trim()
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || 'Could not load exclusion lists');
+  }
+  if (!data.success) {
+    throw new Error(data.message || 'Could not load exclusion lists');
+  }
+  const companies = data.excludedCompanies || [];
+  const locations = data.excludedLocations || [];
+  exclusionListCache = { key, companies, locations, at: Date.now() };
+  return { excludedCompanies: companies, excludedLocations: locations };
+}
+
+async function assertJobNotExcluded(extensionCode, selectedEmails, companyName, jobLocation) {
+  for (const em of selectedEmails) {
+    const { excludedCompanies, excludedLocations } = await fetchExclusionListsForClient(
+      extensionCode,
+      em
+    );
+    const sets = buildExclusionSets(excludedCompanies, excludedLocations);
+    if (isCompanyBlockedLocal(companyName, sets.companySet)) {
+      return { ok: false, message: 'Company name is blocked for this client.' };
+    }
+    if (isLocationBlockedLocal(jobLocation, sets.locationExactSet, sets.locationTokenSet)) {
+      return { ok: false, message: 'Location is blocked for this client.' };
+    }
+  }
+  return { ok: true };
+}
+
 const EXTENSION_CODE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const API_BASE = API_URLS.SAVE_TO_DASHBOARD.replace('/extension/saveToDashboard', '');
 
@@ -146,6 +242,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const jobTitleInput = document.getElementById('job-title');
   const jobDescriptionInput = document.getElementById('job-description');
   const jobUrlInput = document.getElementById('job-url');
+  const jobLocationInput = document.getElementById('job-location');
   const clientPageLoadHintEl = document.getElementById('client-page-load-hint');
   const modalPageLoadHintEl = document.getElementById('modal-page-load-hint');
 
@@ -992,6 +1089,7 @@ document.addEventListener('DOMContentLoaded', function () {
             console.log('Panel auto-filling with job data (confidence: ' + confidence + '):', jobData);
             companyNameInput.value = jobData.company || '';
             jobTitleInput.value = jobData.position || '';
+            if (jobLocationInput) jobLocationInput.value = jobData.location || '';
             jobDescriptionInput.value = jobData.description || '';
             const url = jobData.url || null;
             lastExtractionSourceUrl = url;
@@ -1038,6 +1136,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Clear form
     companyNameInput.value = '';
     jobTitleInput.value = '';
+    if (jobLocationInput) jobLocationInput.value = '';
     jobDescriptionInput.value = '';
     if (jobUrlInput) jobUrlInput.value = '';
     if (saveJobBtn) {
@@ -1057,6 +1156,7 @@ document.addEventListener('DOMContentLoaded', function () {
   async function saveJobData() {
     const companyName = companyNameInput.value.trim();
     const jobTitle = jobTitleInput.value.trim();
+    const jobLocation = jobLocationInput ? jobLocationInput.value.trim() : '';
     const jobDescription = jobDescriptionInput.value.trim();
 
     if (!companyName || !jobTitle || !jobDescription) {
@@ -1104,10 +1204,29 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const extensionCodeToSend = ext.code;
 
+    try {
+      const excl = await assertJobNotExcluded(
+        extensionCodeToSend,
+        selectedEmails,
+        companyName,
+        jobLocation
+      );
+      if (!excl.ok) {
+        alert(excl.message);
+        saveJobBtn.disabled = false;
+        return;
+      }
+    } catch (e) {
+      alert(e.message || 'Could not verify exclusion lists. Try again.');
+      saveJobBtn.disabled = false;
+      return;
+    }
+
     const isOperator = operatorEmail && operatorEmail.endsWith('@flashfirehq');
     const baseJobData = {
       company: companyName,
       position: jobTitle,
+      location: jobLocation || undefined,
       description: jobDescription,
       selectedEmails,
       savedAt: new Date().toISOString(),
@@ -1159,6 +1278,18 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (response.ok) {
         const summary = responseData.summary || {};
+        const details = summary.details || [];
+        const blocked = details.find(
+          (d) => d.error === 'BLOCKED_COMPANY' || d.error === 'BLOCKED_LOCATION'
+        );
+        if (blocked) {
+          alert(
+            blocked.error === 'BLOCKED_COMPANY'
+              ? 'Company name is blocked for this client.'
+              : 'Location is blocked for this client.'
+          );
+          return;
+        }
         if (summary.skippedAsDuplicate > 0 && summary.saved === 0) {
           alert('This job already exists in your dashboard. Duplicate not added.');
         } else if (summary.saved > 0) {
@@ -1405,6 +1536,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Populate form fields with extracted data
             companyNameInput.value = extractedData.company || '';
             jobTitleInput.value = extractedData.position || '';
+            if (jobLocationInput) jobLocationInput.value = extractedData.location || '';
             jobDescriptionInput.value = extractedData.description || '';
             if (jobUrlInput && extractedData.url) jobUrlInput.value = extractedData.url;
             
