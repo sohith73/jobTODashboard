@@ -1,6 +1,45 @@
-import { API_URLS } from './exports.js';
+import { API_URLS, DASHBOARD_FRONTEND_URL, RESUME_BACKEND_URL } from './exports.js';
 
 const EXTENSION_CODE_STORAGE_KEY = 'extension_operator_code';
+const AUTOFILL_SETTINGS_KEY = 'ff_autofill_settings';
+
+// ─── Resume Data Cache (5 hours) ──────────────────────────────────────────────
+const RESUME_CACHE_KEY = 'ff_resume_cache';
+const RESUME_CACHE_TTL = 5 * 60 * 60 * 1000; // 5 hours in ms
+
+function getResumeCache(email) {
+  try {
+    const raw = localStorage.getItem(RESUME_CACHE_KEY);
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (!entry || entry.email !== email) return null;
+    if (Date.now() - entry.cachedAt > RESUME_CACHE_TTL) {
+      localStorage.removeItem(RESUME_CACHE_KEY);
+      return null;
+    }
+    return entry.data;
+  } catch (e) {
+    console.warn('[FlashFire] resume cache read error:', e);
+    return null;
+  }
+}
+
+function setResumeCache(email, data) {
+  try {
+    localStorage.setItem(RESUME_CACHE_KEY, JSON.stringify({
+      email,
+      data,
+      cachedAt: Date.now()
+    }));
+  } catch (e) {
+    // Storage quota exceeded or private browsing — silently skip caching
+    console.warn('[FlashFire] resume cache write error (quota?):', e);
+  }
+}
+
+function clearResumeCache() {
+  try { localStorage.removeItem(RESUME_CACHE_KEY); } catch (e) {}
+}
 
 /** Short-lived cache so repeated saves stay fast (same logic as dashboard backend). */
 let exclusionListCache = { key: '', companies: [], locations: [], at: 0 };
@@ -232,6 +271,20 @@ document.addEventListener('DOMContentLoaded', function () {
   const clientSubtitleEl = document.querySelector('.brand-subtitle');
   const rolesListEl = document.getElementById('client-preferred-roles');
   const locationsListEl = document.getElementById('client-preferred-locations');
+  const clientAutofillBtn = document.getElementById('client-autofill');
+  const autofillAutoNextInput = document.getElementById('autofill-auto-next');
+  const autofillAutoSubmitInput = document.getElementById('autofill-auto-submit');
+  const autofillSaveResponsesInput = document.getElementById('autofill-save-responses');
+  const autofillStatusEl = document.getElementById('autofill-status');
+  const autofillAnalyticsRefreshBtn = document.getElementById('autofill-analytics-refresh');
+  const autofillAnalyticsBodyEl = document.getElementById('autofill-analytics-body');
+  const optStatusSection = document.getElementById('opt-status-section');
+  const optPending = document.getElementById('opt-pending');
+  const optComplete = document.getElementById('opt-complete');
+  const optTimeout = document.getElementById('opt-timeout');
+  const optJobNameEl = document.getElementById('opt-job-name');
+  const optViewBtn = document.getElementById('opt-view-btn');
+  const optDashLink = document.getElementById('opt-dash-link');
 
   // Modal elements
   const jobModal = document.getElementById('job-description-modal');
@@ -255,7 +308,10 @@ document.addEventListener('DOMContentLoaded', function () {
   let operatorEmail = '';
   let operatorName = '';
   let autoExtractTimeoutId = null;
-  const AUTO_EXTRACT_DELAY_MS = 1 * 1000; // Wait 2s for scraping to fill; if still empty, auto-extract
+  const AUTO_EXTRACT_DELAY_MS = 1 * 1000; // Wait 1s for scraping to fill; if still empty, auto-extract
+
+  // Race condition guard: each autofill click gets a unique ID; stale responses are discarded
+  let _autofillRequestId = 0;
 
   // Store URL from extraction/auto-fill to avoid mismatch when user switches tabs before saving
   let lastExtractionSourceUrl = null;
@@ -265,6 +321,11 @@ document.addEventListener('DOMContentLoaded', function () {
   // This prevents wrong-tab messaging when the user switches tabs before saving/extracting.
   let panelTabId = null;
   let pageLoadPollTimer = null;
+  let optPollTimer = null;
+  let activeOptJobId = null;
+  let activeOptJobTitle = '';
+  const OPT_POLL_INTERVAL_MS = 8000;
+  const OPT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
   window.addEventListener('message', function (ev) {
     if (!ev.data || ev.data.type !== 'FF_HOST_TAB_ID') return;
@@ -540,7 +601,7 @@ document.addEventListener('DOMContentLoaded', function () {
         roles: Array.isArray(roles) ? roles : [],
         timestamp: Date.now()
       }));
-    } catch (e) { }
+    } catch (e) { console.warn('[FlashFire] saveClientPreferredRoles error:', e); }
   }
   function saveClientPreferredLocations(locations) {
     try {
@@ -548,14 +609,14 @@ document.addEventListener('DOMContentLoaded', function () {
         locations: Array.isArray(locations) ? locations : [],
         timestamp: Date.now()
       }));
-    } catch (e) { }
+    } catch (e) { console.warn('[FlashFire] saveClientPreferredLocations error:', e); }
   }
 
   function saveClientAuth(token, profile) {
     try {
       if (token) localStorage.setItem('extension_client_token', token);
       if (profile) localStorage.setItem('extension_client_profile', JSON.stringify(profile));
-    } catch (e) { }
+    } catch (e) { console.warn('[FlashFire] saveClientAuth error:', e); }
   }
 
   function loadLoginData() {
@@ -602,7 +663,7 @@ document.addEventListener('DOMContentLoaded', function () {
           return Array.isArray(parsed.roles) ? parsed.roles : [];
         }
       }
-    } catch (e) { }
+    } catch (e) { console.warn('[FlashFire] loadClientPreferredRoles error:', e); }
     return [];
   }
   function loadClientPreferredLocations() {
@@ -614,7 +675,7 @@ document.addEventListener('DOMContentLoaded', function () {
           return Array.isArray(parsed.locations) ? parsed.locations : [];
         }
       }
-    } catch (e) { }
+    } catch (e) { console.warn('[FlashFire] loadClientPreferredLocations error:', e); }
     return [];
   }
 
@@ -723,6 +784,7 @@ document.addEventListener('DOMContentLoaded', function () {
     localStorage.removeItem('extension_login_data');
     localStorage.removeItem('extension_client_login');
     localStorage.removeItem('extension_selected_client');
+    clearResumeCache();
   }
 
   // Check for existing login data on page load
@@ -978,7 +1040,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Client simplified actions
   if (clientVisitLink) {
-    clientVisitLink.setAttribute('href', 'https://portal.flashfirejobs.com/');
+    clientVisitLink.setAttribute('href', DASHBOARD_FRONTEND_URL + '/');
   }
   if (clientSaveBtn) {
     clientSaveBtn.addEventListener('click', function () {
@@ -989,6 +1051,8 @@ document.addEventListener('DOMContentLoaded', function () {
   if (clientLogoutBtn) {
     clientLogoutBtn.addEventListener('click', function () {
       stopPageLoadPolling();
+      stopOptimizationPolling();
+      hideOptStatus();
       if (clientSaveBtn) clientSaveBtn.disabled = false;
       if (clientPageLoadHintEl) {
         clientPageLoadHintEl.classList.add('hidden');
@@ -1293,8 +1357,19 @@ document.addEventListener('DOMContentLoaded', function () {
         if (summary.skippedAsDuplicate > 0 && summary.saved === 0) {
           alert('This job already exists in your dashboard. Duplicate not added.');
         } else if (summary.saved > 0) {
-          alert('Job saved to dashboard successfully!');
           hideJobModal();
+          // Extract saved jobId for optimization polling
+          const savedDetail = details.find(d => d.status === 'saved' && d.jobId);
+          const savedJobId = savedDetail ? String(savedDetail.jobId) : null;
+          const savedJobTitle = jobData.company && jobData.position
+            ? `${jobData.position} @ ${jobData.company}`
+            : (jobData.position || jobData.company || 'your application');
+          if (savedJobId) {
+            startOptimizationPolling(savedJobId, savedJobTitle);
+          } else {
+            // No jobId returned – fallback success message
+            showSaveSuccess('Job saved! Optimization will start automatically.');
+          }
         } else {
           alert(responseData.message || 'Job saving process completed.');
         }
@@ -1317,6 +1392,513 @@ document.addEventListener('DOMContentLoaded', function () {
       alert('Error saving job: ' + error.message);
     }
   }
+
+  // ─── Save Success Feedback ────────────────────────────────────────────────────
+  function showSaveSuccess(msg) {
+    if (autofillStatusEl) {
+      autofillStatusEl.className = 'autofill-status success';
+      autofillStatusEl.textContent = '✅ ' + msg;
+      autofillStatusEl.classList.remove('hidden');
+      setTimeout(() => autofillStatusEl.classList.add('hidden'), 5000);
+    }
+  }
+
+  // ─── Optimization Polling ─────────────────────────────────────────────────────
+  function showOptStatus(state) {
+    if (!optStatusSection) return;
+    optStatusSection.classList.remove('hidden');
+    if (optPending) optPending.classList.toggle('hidden', state !== 'pending');
+    if (optComplete) optComplete.classList.toggle('hidden', state !== 'complete');
+    if (optTimeout) optTimeout.classList.toggle('hidden', state !== 'timeout');
+  }
+
+  function hideOptStatus() {
+    if (optStatusSection) optStatusSection.classList.add('hidden');
+    stopOptimizationPolling();
+  }
+
+  function stopOptimizationPolling() {
+    if (optPollTimer) {
+      clearTimeout(optPollTimer);
+      optPollTimer = null;
+    }
+    activeOptJobId = null;
+  }
+
+  function startOptimizationPolling(jobId, jobTitle) {
+    stopOptimizationPolling();
+    activeOptJobId = jobId;
+    activeOptJobTitle = jobTitle || '';
+
+    // Update job name label
+    if (optJobNameEl) {
+      optJobNameEl.textContent = activeOptJobTitle || 'Tailoring to your job application...';
+    }
+
+    // Set the portal link on the view button and dash link
+    const portalUrl = `${DASHBOARD_FRONTEND_URL}/optimize/download/${jobId}`;
+    if (optViewBtn) {
+      optViewBtn.onclick = () => {
+        chrome.tabs.create({ url: portalUrl }).catch(() => {
+          window.open(portalUrl, '_blank');
+        });
+      };
+    }
+    if (optDashLink) {
+      optDashLink.href = DASHBOARD_FRONTEND_URL + '/';
+    }
+
+    showOptStatus('pending');
+
+    const startTime = Date.now();
+
+    async function poll() {
+      if (activeOptJobId !== jobId) return; // Superseded by a newer poll
+      try {
+        const res = await fetch(`${API_URLS.GET_OPTIMIZED_RESUME}/${jobId}`);
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.success && data.optimizedResume?.hasResume) {
+            // Optimization complete!
+            stopOptimizationPolling();
+            showOptStatus('complete');
+            return;
+          }
+        }
+        // Not ready yet — check timeout
+        if (Date.now() - startTime >= OPT_TIMEOUT_MS) {
+          stopOptimizationPolling();
+          showOptStatus('timeout');
+          return;
+        }
+        // Schedule next poll
+        optPollTimer = setTimeout(poll, OPT_POLL_INTERVAL_MS);
+      } catch (_) {
+        // Network error — retry unless timed out
+        if (Date.now() - startTime < OPT_TIMEOUT_MS) {
+          optPollTimer = setTimeout(poll, OPT_POLL_INTERVAL_MS * 1.5);
+        } else {
+          showOptStatus('timeout');
+        }
+      }
+    }
+
+    // Start first poll after a short delay (give backend time to process)
+    optPollTimer = setTimeout(poll, 5000);
+  }
+
+  // ─── Auto Fill ────────────────────────────────────────────────────────────────
+  function showAutofillStatus(type, msg) {
+    if (!autofillStatusEl) return;
+    autofillStatusEl.className = 'autofill-status ' + type;
+    autofillStatusEl.textContent = msg;
+    autofillStatusEl.classList.remove('hidden');
+    setTimeout(() => autofillStatusEl.classList.add('hidden'), 6000);
+  }
+
+  function renderAutofillAnalytics(summary) {
+    if (!autofillAnalyticsBodyEl) return;
+    const rows = (summary && Array.isArray(summary.top)) ? summary.top : [];
+    const candidates = (summary && Array.isArray(summary.adapterCandidates)) ? summary.adapterCandidates : [];
+    if (!rows.length) {
+      autofillAnalyticsBodyEl.textContent = 'No telemetry yet. Use Auto Fill on a few application pages.';
+      return;
+    }
+
+    const top = rows.slice(0, 8);
+    const esc = (s) => String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const rowsHtml = top.map((r) => {
+      const host = String(r.host || '');
+      const runs = Number(r.runs || 0);
+      const rate = Number(r.fillRate || 0);
+      const weak = runs >= 3 && rate < 60;
+      return `
+        <div class="autofill-analytics-row">
+          <span class="autofill-analytics-host" title="${esc(host)}">${esc(host)}</span>
+          <span class="autofill-analytics-metric">${rate}% · ${runs} runs${weak ? ' · adapter?' : ''}</span>
+        </div>
+      `;
+    }).join('');
+
+    let candidateHtml = '';
+    if (candidates.length) {
+      const topC = candidates.slice(0, 3).map((c) => {
+        const host = esc(c.host || '');
+        const rate = Number(c.fillRate || 0);
+        const hint = c.topUnmatched && c.topUnmatched[0] ? esc(c.topUnmatched[0].label || '') : '';
+        return `<div class="autofill-analytics-row"><span class="autofill-analytics-host" title="${host}">${host}</span><span class="autofill-analytics-metric">${rate}%${hint ? ` · ${hint.slice(0, 18)}...` : ''}</span></div>`;
+      }).join('');
+      candidateHtml = `<div style="margin-top:8px;font-weight:600;color:#6b7280;">Adapter Candidates</div>${topC}`;
+    }
+
+    autofillAnalyticsBodyEl.innerHTML = rowsHtml + candidateHtml;
+  }
+
+  function refreshAutofillAnalytics() {
+    if (!autofillAnalyticsBodyEl) return;
+    autofillAnalyticsBodyEl.textContent = 'Loading analytics...';
+    try {
+      chrome.runtime.sendMessage({ action: 'getAutofillTelemetrySummary' }, function (res) {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          autofillAnalyticsBodyEl.textContent = 'Could not load analytics.';
+          return;
+        }
+        renderAutofillAnalytics(res.summary || { top: [] });
+      });
+    } catch (_) {
+      autofillAnalyticsBodyEl.textContent = 'Could not load analytics.';
+    }
+  }
+
+  // SpeedyApply-style defaults:
+  // - autoClickNextPage ON: step-through multi-page forms
+  // - autoSubmit OFF: keep final submit user-controlled for safety
+  const AUTOPILOT_DEFAULTS = {
+    autoClickNextPage: true,
+    autoSubmit: false,
+    saveResponses: true
+  };
+
+  function loadAutofillSettings() {
+    try {
+      const raw = localStorage.getItem(AUTOFILL_SETTINGS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return {
+        autoClickNextPage: parsed.autoClickNextPage !== false,
+        autoSubmit: parsed.autoSubmit === true,
+        saveResponses: parsed.saveResponses !== false
+      };
+    } catch {
+      return { ...AUTOPILOT_DEFAULTS };
+    }
+  }
+
+  function saveAutofillSettings(settings) {
+    try {
+      localStorage.setItem(AUTOFILL_SETTINGS_KEY, JSON.stringify({
+        autoClickNextPage: Boolean(settings.autoClickNextPage),
+        autoSubmit: Boolean(settings.autoSubmit),
+        saveResponses: Boolean(settings.saveResponses)
+      }));
+    } catch (_) {}
+  }
+
+  function getAutopilotSettingsFromUI() {
+    const loaded = loadAutofillSettings();
+    return {
+      autoClickNextPage: autofillAutoNextInput ? autofillAutoNextInput.checked : loaded.autoClickNextPage,
+      autoSubmit: autofillAutoSubmitInput ? autofillAutoSubmitInput.checked : loaded.autoSubmit,
+      saveResponses: autofillSaveResponsesInput ? autofillSaveResponsesInput.checked : loaded.saveResponses
+    };
+  }
+
+  async function triggerAutoFill() {
+    if (!loggedInEmail) {
+      showAutofillStatus('warning', '⚠️ Please log in to use Auto Fill.');
+      return;
+    }
+
+    const autopilotSettings = getAutopilotSettingsFromUI();
+    if (autopilotSettings.autoSubmit) {
+      const allowed = window.confirm(
+        'Auto-submit is enabled. The extension may click final submit buttons on this page. Continue?'
+      );
+      if (!allowed) return;
+    }
+
+    // Race condition guard — capture this invocation's ID
+    const myRequestId = ++_autofillRequestId;
+
+    if (clientAutofillBtn) {
+      clientAutofillBtn.disabled = true;
+      clientAutofillBtn.textContent = '⚡ Loading profile...';
+    }
+
+    try {
+      // ── 1. Check 5-hour localStorage cache first ────────────────────────────
+      let resumeData = getResumeCache(loggedInEmail);
+      if (resumeData) {
+        console.log('[FlashFire] Using cached resume data (age < 5h)');
+      } else {
+        // ── 2. Fetch from backend with 15s timeout ──────────────────────────
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+          res = await fetch(API_URLS.RESUME_BY_EMAIL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: loggedInEmail }),
+            signal: controller.signal
+          });
+        } catch (fetchErr) {
+          if (fetchErr.name === 'AbortError') {
+            showAutofillStatus('error', '❌ Profile fetch timed out. Check your connection and try again.');
+            return;
+          }
+          throw fetchErr;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        if (myRequestId !== _autofillRequestId) return; // Superseded by a newer click
+
+        if (res.status === 404) {
+          showAutofillStatus('warning', '⚠️ No linked resume found. Ask your coordinator to assign a resume first.');
+          return;
+        }
+        if (!res.ok) throw new Error('Resume fetch failed: ' + res.status);
+
+        resumeData = await res.json();
+        // ── 3. Cache for 5 hours ──────────────────────────────────────────────
+        setResumeCache(loggedInEmail, resumeData);
+      }
+
+      if (myRequestId !== _autofillRequestId) return; // Superseded while cache was read
+      const info = resumeData.personalInfo || {};
+
+      // firstName/lastName come directly from ResumeIndex; fall back to splitting name
+      const firstName = resumeData.firstName || (info.name || '').trim().split(/\s+/)[0] || '';
+      const lastName = resumeData.lastName || ((info.name || '').trim().split(/\s+/).slice(1).join(' ')) || '';
+
+      // ── Work Experience ──────────────────────────────────────────────────────
+      const workExp = Array.isArray(resumeData.workExperience) ? resumeData.workExperience : [];
+      const latestJob = workExp[0] || {};
+      // Parse duration like "Jan 2022 – Present" or "2020 - 2023"
+      const durationParts = (latestJob.duration || '').split(/[-–—to]+/).map(s => s.trim());
+      const lastJobStart = durationParts[0] || '';
+      const lastJobEnd = durationParts[1] || '';
+      const lastResponsibilities = Array.isArray(latestJob.responsibilities)
+        ? latestJob.responsibilities.join('\n• ')
+        : '';
+
+      // ── Education ────────────────────────────────────────────────────────────
+      const edu = Array.isArray(resumeData.education) ? resumeData.education : [];
+      const bachelors = edu.find(e => /bachelor|bs\b|ba\b|b\.s\.|b\.a\.|undergraduate/i.test(e.degree || ''));
+      const masters = edu.find(e => /master|ms\b|ma\b|m\.s\.|m\.a\.|mba|graduate/i.test(e.degree || ''));
+      const phd = edu.find(e => /phd|ph\.d|doctor|doctorate/i.test(e.degree || ''));
+      const highestEdu = phd || masters || bachelors || edu[0] || {};
+      // Infer degree label for dropdowns
+      let degreeLevel = '';
+      if (phd) degreeLevel = 'PhD';
+      else if (masters) degreeLevel = "Master's";
+      else if (bachelors) degreeLevel = "Bachelor's";
+
+      // ── Skills ───────────────────────────────────────────────────────────────
+      const skills = Array.isArray(resumeData.skills) ? resumeData.skills : [];
+      // Build skills text: include both category names and skill values for rich matching
+      const certSkill = skills.find(s => /certif/i.test(s.category || ''));
+      const nonCertSkills = skills.filter(s => !/certif/i.test(s.category || ''));
+      const skillsText = nonCertSkills.map(s => s.skills || '').filter(Boolean).join(', ');
+      const certificationsText = certSkill ? certSkill.skills : '';
+
+      // ── Projects ─────────────────────────────────────────────────────────────
+      const projects = Array.isArray(resumeData.projects) ? resumeData.projects : [];
+      const projectsText = projects.map(p =>
+        [p.position || p.company, p.responsibilities ? p.responsibilities.join('. ') : ''].filter(Boolean).join(': ')
+      ).join('\n\n');
+
+      // ── Languages from skills array ──────────────────────────────────────────
+      const langSkill = skills.find(s => /language/i.test(s.category || ''));
+      const languagesText = langSkill ? langSkill.skills : '';
+
+      // ── Parse location parts ─────────────────────────────────────────────────
+      // Expected formats: "Austin, TX, USA" or "Austin, TX" or "Austin"
+      const locationParts = (info.location || '').split(',').map(s => s.trim());
+      const cityPart    = locationParts[0] || '';
+      const statePart   = locationParts[1] || '';
+      const countryRaw  = locationParts.length > 2 ? locationParts[locationParts.length - 1] : (locationParts.length === 2 ? locationParts[1] : '');
+      // Normalize country: "USA" → include "United States" as primary value for form dropdowns
+      const COUNTRY_FULL_NAMES = {
+        'usa': 'United States', 'us': 'United States', 'u.s.': 'United States',
+        'uk': 'United Kingdom', 'gb': 'United Kingdom',
+        'uae': 'United Arab Emirates', 'in': 'India', 'ca': 'Canada',
+        'au': 'Australia', 'de': 'Germany', 'fr': 'France', 'sg': 'Singapore'
+      };
+      const countryPart = COUNTRY_FULL_NAMES[countryRaw.toLowerCase().trim()] || countryRaw;
+      // State: keep abbreviation (the fillSelect alias map in content.js expands it)
+      const STATE_FULL_NAMES = {
+        'al':'Alabama','ak':'Alaska','az':'Arizona','ar':'Arkansas','ca':'California',
+        'co':'Colorado','ct':'Connecticut','de':'Delaware','fl':'Florida','ga':'Georgia',
+        'hi':'Hawaii','id':'Idaho','il':'Illinois','in':'Indiana','ia':'Iowa','ks':'Kansas',
+        'ky':'Kentucky','la':'Louisiana','me':'Maine','md':'Maryland','ma':'Massachusetts',
+        'mi':'Michigan','mn':'Minnesota','ms':'Mississippi','mo':'Missouri','mt':'Montana',
+        'ne':'Nebraska','nv':'Nevada','nh':'New Hampshire','nj':'New Jersey','nm':'New Mexico',
+        'ny':'New York','nc':'North Carolina','nd':'North Dakota','oh':'Ohio','ok':'Oklahoma',
+        'or':'Oregon','pa':'Pennsylvania','ri':'Rhode Island','sc':'South Carolina',
+        'sd':'South Dakota','tn':'Tennessee','tx':'Texas','ut':'Utah','vt':'Vermont',
+        'va':'Virginia','wa':'Washington','wv':'West Virginia','wi':'Wisconsin','wy':'Wyoming',
+        'dc':'District of Columbia'
+      };
+      const stateKey = statePart.trim().toLowerCase();
+      // Send full state name so it matches both "Texas" and "TX" dropdowns
+      const statePartNorm = STATE_FULL_NAMES[stateKey] || statePart;
+
+      // ── Build flat profile for content.js ───────────────────────────────────
+      const profile = {
+        // Identity
+        firstName,
+        lastName,
+        middleName: resumeData.middleName || '',
+        suffix:     resumeData.suffix || '',
+        pronouns:   resumeData.pronouns || '',
+        fullName:   [firstName, lastName].filter(Boolean).join(' '),
+        // Contact
+        email: info.email || loggedInEmail,
+        contactNumber: info.phone || '',
+        phoneExt: info.phoneExt || '',
+        // Social / links
+        linkedinUrl:      info.linkedin || '',
+        githubUrl:        info.github || '',
+        portfolioUrl:     info.portfolio || '',
+        twitterUrl:       info.twitter || '',
+        stackoverflowUrl: info.stackoverflow || '',
+        dribbbleUrl:      info.dribbble || '',
+        // Location
+        address:      info.location || '',
+        streetAddress: info.location || '',
+        city:         cityPart,
+        state:        statePartNorm,
+        country:      countryPart,
+        zip:          resumeData.zip || info.zip || '',
+        // Current / latest job
+        currentTitle:         info.title || latestJob.position || '',
+        lastJobTitle:         latestJob.position || '',
+        lastEmployer:         latestJob.company || '',
+        lastJobLocation:      latestJob.location || '',
+        lastJobStart,
+        lastJobEnd,
+        lastJobResponsibilities: lastResponsibilities ? '• ' + lastResponsibilities : '',
+        // Education
+        schoolName:    highestEdu.institution || '',
+        highestDegree: highestEdu.degree || '',
+        degreeLevel,
+        fieldOfStudy:  highestEdu.field || '',
+        graduationYear: (highestEdu.duration || '').split(/[-–—]/).pop().trim(),
+        coursework:    highestEdu.additionalInfo || '',
+        bachelorsUniDegree: bachelors
+          ? `${bachelors.degree}${bachelors.field ? ' in ' + bachelors.field : ''}${bachelors.institution ? ' — ' + bachelors.institution : ''}`
+          : '',
+        mastersUniDegree: masters
+          ? `${masters.degree}${masters.field ? ' in ' + masters.field : ''}${masters.institution ? ' — ' + masters.institution : ''}`
+          : '',
+        bachelorsGPA: bachelors ? (bachelors.additionalInfo || '') : '',
+        // Content
+        summaryText:      resumeData.summary || '',
+        skillsText,
+        certificationsText,
+        languagesText,
+        projectsText,
+        // Job preferences / work auth
+        visaStatus:          resumeData.visaStatus || info.visaStatus || '',
+        needsSponsorship:    resumeData.needsSponsorship || '',
+        experienceLevel:     resumeData.experienceLevel || (workExp.length > 0 ? String(workExp.length) + '+' : ''),
+        expectedSalaryRange: resumeData.expectedSalaryRange || '',
+        currentSalary:       resumeData.currentSalary || '',
+        salaryMin:           resumeData.salaryMin || '',
+        salaryMax:           resumeData.salaryMax || '',
+        joinDate:            resumeData.joinDate || '',
+        noticePeriod:        resumeData.noticePeriod || '',
+        // Diversity (EEO)
+        gender:         resumeData.gender || '',
+        ethnicity:      resumeData.ethnicity || '',
+        veteranStatus:  resumeData.veteranStatus || '',
+        disability:     resumeData.disability || '',
+        // Misc
+        hearAboutUs:      'LinkedIn',
+        referralName:     '',
+        securityClearance: resumeData.securityClearance || '',
+        driversLicense:   resumeData.driversLicense || '',
+        // Raw arrays for advanced handling
+        _workExperience: workExp,
+        _education:      edu,
+        _skills:         skills
+      };
+
+      // Send profile to content script for form filling
+      getMyTabId(function (tabId) {
+        if (!tabId) {
+          showAutofillStatus('error', '❌ Could not detect tab. Reload the page and try again.');
+          return;
+        }
+        try {
+          chrome.tabs.sendMessage(tabId, { action: 'fillFormFields', profile, autopilot: autopilotSettings }, function (response) {
+            if (chrome.runtime.lastError) {
+              showAutofillStatus('warning', '⚠️ Auto Fill only works on job application pages.');
+              return;
+            }
+            if (response && response.filled > 0) {
+              const autoNext = response.autopilot && response.autopilot.clickedNext;
+              const autoSubmit = response.autopilot && response.autopilot.clickedSubmit;
+              let statusMsg = `✅ Filled ${response.filled} field${response.filled !== 1 ? 's' : ''} automatically!`;
+              if (autoSubmit) statusMsg += ' Submitted this step.';
+              else if (autoNext) statusMsg += ' Moved to next step.';
+              showAutofillStatus('success', statusMsg);
+            } else if (response && response.total === 0) {
+              showAutofillStatus('warning', '⚠️ No form fields found on this page. Navigate to the job application form first.');
+            } else {
+              showAutofillStatus('warning', '⚠️ No matching fields found. Try on a job application page.');
+            }
+            refreshAutofillAnalytics();
+          });
+        } catch (e) {
+          showAutofillStatus('error', '❌ Auto Fill failed. Reload and try again.');
+        }
+      });
+    } catch (err) {
+      console.error('[FlashFire] Auto fill error:', err);
+      showAutofillStatus('error', '❌ Could not load profile. Check your connection.');
+    } finally {
+      if (clientAutofillBtn) {
+        clientAutofillBtn.disabled = false;
+        clientAutofillBtn.innerHTML = `
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="rgba(255,255,255,0.9)" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Auto Fill Application`;
+      }
+    }
+  }
+
+  // Bind autofill button
+  if (clientAutofillBtn) {
+    clientAutofillBtn.addEventListener('click', triggerAutoFill);
+  }
+  if (autofillAnalyticsRefreshBtn) {
+    autofillAnalyticsRefreshBtn.addEventListener('click', refreshAutofillAnalytics);
+  }
+
+  // Bind and restore autofill settings
+  (function setupAutofillSettingsControls() {
+    const settings = loadAutofillSettings();
+    if (autofillAutoNextInput) autofillAutoNextInput.checked = settings.autoClickNextPage;
+    if (autofillAutoSubmitInput) autofillAutoSubmitInput.checked = settings.autoSubmit;
+    if (autofillSaveResponsesInput) autofillSaveResponsesInput.checked = settings.saveResponses;
+
+    if (autofillAutoNextInput) {
+      autofillAutoNextInput.addEventListener('change', function () {
+        saveAutofillSettings(getAutopilotSettingsFromUI());
+      });
+    }
+    if (autofillAutoSubmitInput) {
+      autofillAutoSubmitInput.addEventListener('change', function () {
+        saveAutofillSettings(getAutopilotSettingsFromUI());
+      });
+    }
+    if (autofillSaveResponsesInput) {
+      autofillSaveResponsesInput.addEventListener('change', function () {
+        saveAutofillSettings(getAutopilotSettingsFromUI());
+      });
+    }
+  })();
+
+  refreshAutofillAnalytics();
 
   // Modal event listeners
   closeModalBtn.addEventListener('click', hideJobModal);
@@ -1585,19 +2167,44 @@ document.addEventListener('DOMContentLoaded', function () {
       const isSelectedClient = (operatorEmail && operatorEmail.endsWith('@flashfirehq') && selectedClientEmail === user.email);
       userCard.className = `user-card ${isSelectedClient ? 'selected-client' : ''}`;
 
-      const selectionIndicator = isSelectedClient ? '<span class="selected-indicator">✓ Selected</span>' : '';
-      const inputType = (operatorEmail && operatorEmail.endsWith('@flashfirehq')) ? 'radio' : 'checkbox';
-      const inputName = (operatorEmail && operatorEmail.endsWith('@flashfirehq')) ? 'client-selection' : '';
-      userCard.innerHTML = `
-          <div class="user-info">
-            <h3>${user.name} ${selectionIndicator}</h3>
-            <p>${user.email}</p>
-          </div>
-          <div class="checkbox-container">
-            <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} class="user-checkbox" data-id="${user._id}" ${isSelectedClient || isSelected ? 'checked' : ''}>
-            <span class="checkmark"></span>
-          </div>
-        `;
+      // Build DOM nodes with textContent to prevent XSS from malicious user.name/email values
+      const userInfo = document.createElement('div');
+      userInfo.className = 'user-info';
+
+      const nameEl = document.createElement('h3');
+      nameEl.textContent = user.name || '';
+      if (isSelectedClient) {
+        const indicator = document.createElement('span');
+        indicator.className = 'selected-indicator';
+        indicator.textContent = '✓ Selected';
+        nameEl.appendChild(indicator);
+      }
+
+      const emailEl = document.createElement('p');
+      emailEl.textContent = user.email || '';
+
+      userInfo.appendChild(nameEl);
+      userInfo.appendChild(emailEl);
+
+      const checkboxContainer = document.createElement('div');
+      checkboxContainer.className = 'checkbox-container';
+
+      const inputEl = document.createElement('input');
+      const isOp = operatorEmail && operatorEmail.endsWith('@flashfirehq');
+      inputEl.type = isOp ? 'radio' : 'checkbox';
+      if (isOp) inputEl.name = 'client-selection';
+      inputEl.className = 'user-checkbox';
+      inputEl.dataset.id = user._id;
+      inputEl.checked = !!(isSelectedClient || isSelected);
+
+      const checkmark = document.createElement('span');
+      checkmark.className = 'checkmark';
+
+      checkboxContainer.appendChild(inputEl);
+      checkboxContainer.appendChild(checkmark);
+
+      userCard.appendChild(userInfo);
+      userCard.appendChild(checkboxContainer);
 
       usersList.appendChild(userCard);
 

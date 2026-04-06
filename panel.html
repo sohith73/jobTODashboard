@@ -96,10 +96,106 @@
           <div class="roles-title">Preferred Locations</div>
           <div id="client-preferred-locations" class="roles-list"></div>
         </div>
-        <button id="client-save" class="client-action-btn" type="button">Save to Dashboard</button>
+        <button id="client-save" class="client-action-btn" type="button">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="17 21 17 13 7 13 7 21" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Save to Dashboard
+        </button>
         <p id="client-page-load-hint" class="page-load-hint page-load-hint--wait hidden" role="status"></p>
-        <a id="client-visit" href="https://frontend-dashboard-sohith.vercel.app/" target="_blank"
-          class="client-action-btn">Visit Dashboard</a>
+
+        <!-- Auto Fill Button -->
+        <button id="client-autofill" class="client-action-btn client-autofill-btn" type="button">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="rgba(255,255,255,0.9)" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Auto Fill Application
+        </button>
+        <div class="autofill-settings" id="autofill-settings">
+          <label class="autofill-setting-row">
+            <input type="checkbox" id="autofill-auto-next" checked>
+            <span>Auto-click Next/Continue</span>
+          </label>
+          <label class="autofill-setting-row">
+            <input type="checkbox" id="autofill-auto-submit">
+            <span>Auto-submit final step (High Risk)</span>
+          </label>
+          <label class="autofill-setting-row">
+            <input type="checkbox" id="autofill-save-responses" checked>
+            <span>Learn from my form answers</span>
+          </label>
+        </div>
+
+        <!-- Autofill Status Toast -->
+        <div id="autofill-status" class="autofill-status hidden"></div>
+        <div class="autofill-analytics">
+          <button id="autofill-analytics-refresh" class="client-action-btn client-visit-btn" type="button">
+            Autofill Analytics
+          </button>
+          <div id="autofill-analytics-body" class="autofill-analytics-body">
+            No telemetry yet. Use Auto Fill on a few application pages.
+          </div>
+        </div>
+
+        <a id="client-visit" href="http://localhost:3000/" target="_blank"
+          class="client-action-btn client-visit-btn">
+          <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="15 3 21 3 21 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="10" y1="14" x2="21" y2="3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Visit Dashboard
+        </a>
+
+        <!-- Optimization Status Section (shown after saving) -->
+        <div id="opt-status-section" class="opt-status-section hidden">
+          <!-- Pending / Optimizing -->
+          <div id="opt-pending" class="opt-card opt-card-pending">
+            <div class="opt-spinner-wrap">
+              <svg class="opt-spinner" viewBox="0 0 40 40">
+                <circle class="opt-spinner-bg" cx="20" cy="20" r="16" fill="none" stroke-width="3"/>
+                <circle class="opt-spinner-arc" cx="20" cy="20" r="16" fill="none" stroke-width="3" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="opt-info">
+              <div class="opt-label">Optimizing Resume</div>
+              <div class="opt-job-name" id="opt-job-name">Tailoring to your job application...</div>
+            </div>
+          </div>
+
+          <!-- Complete -->
+          <div id="opt-complete" class="opt-card opt-card-done hidden">
+            <div class="opt-done-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="22 4 12 14.01 9 11.01" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="opt-info">
+              <div class="opt-label">Resume Ready!</div>
+              <div class="opt-sub">Your tailored resume is optimized</div>
+            </div>
+            <button id="opt-view-btn" class="opt-view-btn" type="button">
+              View &amp; Download PDF
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="opt-view-icon">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke-width="2" stroke-linecap="round"/>
+                <polyline points="15 3 21 3 21 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="10" y1="14" x2="21" y2="3" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Timeout / Long wait -->
+          <div id="opt-timeout" class="opt-card opt-card-timeout hidden">
+            <div class="opt-info">
+              <div class="opt-label">⏳ Still Processing</div>
+              <div class="opt-sub">Optimization takes a few minutes. Check your dashboard.</div>
+            </div>
+            <a id="opt-dash-link" href="http://localhost:3000/" target="_blank" class="opt-dash-btn">Open Dashboard</a>
+          </div>
+        </div>
+
       </div>
     </div>
 
