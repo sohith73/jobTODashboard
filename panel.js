@@ -210,6 +210,33 @@ function getOrPromptExtensionCode() {
   return showExtensionCodeModal();
 }
 
+/** Modal field overrides cache: whatever user typed (5 digits) is sent on Save Job. */
+async function resolveExtensionCodeForSave() {
+  const codeInput = document.getElementById('extension-code-display');
+  const typed = codeInput ? String(codeInput.value).trim() : '';
+  if (typed) {
+    if (!/^\d{5}$/.test(typed)) {
+      alert('Operator code must be exactly 5 digits.');
+      return null;
+    }
+    const stored = getStoredExtensionCode();
+    const name = stored && String(stored.code) === typed ? stored.name || '' : '';
+    return { code: typed, name };
+  }
+  return getOrPromptExtensionCode();
+}
+
+function cacheExtensionCodeAfterSuccessfulSave(extensionCode) {
+  try {
+    const c = String(extensionCode || '').trim();
+    if (!/^\d{5}$/.test(c)) return;
+    const prev = getStoredExtensionCode();
+    const name = prev && String(prev.code) === c ? prev.name || '' : '';
+    saveExtensionCodeCache(c, name);
+    refreshExtensionCodeDisplay();
+  } catch (e) {}
+}
+
 document.addEventListener('DOMContentLoaded', function () {
   const loginForm = document.getElementById('login-form');
   const loginContainer = document.getElementById('login-container');
@@ -1140,7 +1167,8 @@ document.addEventListener('DOMContentLoaded', function () {
     jobDescriptionInput.value = '';
     if (jobUrlInput) jobUrlInput.value = '';
     if (saveJobBtn) {
-      saveJobBtn.classList.remove('has-extracted');
+      saveJobBtn.classList.remove('has-extracted', 'save-job--saving');
+      saveJobBtn.setAttribute('aria-busy', 'false');
       saveJobBtn.disabled = false;
     }
     if (extractBtn) {
@@ -1196,7 +1224,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
-    const ext = await getOrPromptExtensionCode();
+    const ext = await resolveExtensionCodeForSave();
     if (!ext) {
       alert('Operator code is required to add jobs.');
       saveJobBtn.disabled = false;
@@ -1257,8 +1285,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const jobData = { ...baseJobData, url: urlToUse };
     lastExtractionSourceUrl = null; // Clear after use
     try {
+      saveJobBtn.classList.add('save-job--saving');
+      saveJobBtn.setAttribute('aria-busy', 'true');
       await sendJobToBackend(jobData);
     } finally {
+      saveJobBtn.classList.remove('save-job--saving');
+      saveJobBtn.setAttribute('aria-busy', 'false');
       saveJobBtn.disabled = false;
     }
   }
@@ -1277,6 +1309,7 @@ document.addEventListener('DOMContentLoaded', function () {
         responseData = {};
       }
       if (response.ok) {
+        cacheExtensionCodeAfterSuccessfulSave(jobData.extensionCode);
         const summary = responseData.summary || {};
         const details = summary.details || [];
         const blocked = details.find(
