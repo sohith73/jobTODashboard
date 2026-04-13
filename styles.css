@@ -796,17 +796,11 @@ body {
   color: #6b7280;
 }
 
-.modal-body .input-group input.extension-code-readonly {
+.modal-body .input-group input.extension-code-input {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.06em;
-  cursor: default;
+  cursor: text;
   font-weight: 600;
-}
-
-.modal-body .input-group input.extension-code-readonly:focus {
-  background: #f9fafb;
-  border-color: #e5e7eb;
-  box-shadow: none;
 }
 
 .modal-footer {
@@ -1008,6 +1002,40 @@ body {
   display: inline;
 }
 
+.save-job-loader {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.save-job-loader .spinner {
+  width: 18px;
+  height: 18px;
+  color: white;
+}
+
+.save-job-loader .spinner-circle {
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 31.416;
+  stroke-dashoffset: 31.416;
+  animation: extractSpin 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transform-origin: center;
+}
+
+.save-btn.save-job--saving .save-job-icon,
+.save-btn.save-job--saving .save-text,
+.save-btn.save-job--saving .save-extracted-text {
+  display: none;
+}
+
+.save-btn.save-job--saving .save-job-loader {
+  display: flex;
+}
 
 .cancel-btn {
   padding: 11px 20px;

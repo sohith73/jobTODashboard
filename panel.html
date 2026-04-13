@@ -274,8 +274,8 @@
         <p id="modal-page-load-hint" class="page-load-hint" role="status"></p>
         <div class="input-group extension-code-row" id="extension-code-row">
           <label for="extension-code-display">Operator code (saved in extension)</label>
-          <input type="text" id="extension-code-display" readonly class="extension-code-readonly" value="" placeholder="Verify code when saving — not set yet" autocomplete="off">
-          <span class="job-url-hint">5-digit code from admin; stored locally for 90 days after verification</span>
+          <input type="text" id="extension-code-display" class="extension-code-input" value="" inputmode="numeric" pattern="[0-9]*" maxlength="5" placeholder="12345" autocomplete="off">
+          <span class="job-url-hint">5-digit code from admin; edit anytime — value here is sent on Save Job and cached for 90 days after a successful save</span>
         </div>
       </div>
       <div class="modal-footer">
@@ -294,12 +294,17 @@
             <span class="extract-text">Extract</span>
             <span class="extract-tooltip">Our AI will extract the job for you (usually 2–4 seconds)</span>
           </button>
-          <button id="save-job" class="save-btn">
-            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <button id="save-job" class="save-btn" type="button" aria-busy="false">
+            <svg class="btn-icon save-job-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               <polyline points="17 21 17 13 7 13 7 21" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               <polyline points="7 3 7 8 15 8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
+            <div class="save-job-loader" aria-hidden="true">
+              <svg class="spinner" viewBox="0 0 24 24" fill="none">
+                <circle class="spinner-circle" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+              </svg>
+            </div>
             <span class="save-text">Save Job</span>
             <span class="save-extracted-text">Save Extracted Job</span>
           </button>
